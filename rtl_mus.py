@@ -74,12 +74,12 @@ def add_data_to_clients(new_data):
         if client.waiting_data:
             if client.waiting_data.full():
                 if cfg.cache_full_behaviour == 0:
-                    LOGGER.error("client cache full, dropping samples: {}".format(client))
+                    LOGGER.error("client cache full, dropping samples: %s", client)
                     while not client.waiting_data.empty():  # clear queue
                         client.waiting_data.get(False, None)
                 elif cfg.cache_full_behaviour == 1:
                     # rather closing client:
-                    LOGGER.error("client cache full, dropping client: {}".format(client))
+                    LOGGER.error("client cache full, dropping client: %s", client)
                     client.close()
                 elif cfg.cache_full_behaviour == 2:
                     pass  # client cache full, just not taking care
@@ -134,13 +134,13 @@ class ClientHandler(asyncore.dispatcher):
 
     def handle_error(self):
         exc_type, exc_value, exc_traceback = sys.exc_info()
-        LOGGER.info("client error: {}".format(self.client))
+        LOGGER.info("client error: %s", self.client)
         LOGGER.exception(exc_value)
         self.close()
 
     def handle_close(self):
         self.client.close()
-        LOGGER.info("client disconnected: {}".format(self.client))
+        LOGGER.info("client disconnected: %s", self.client)
 
     def writable(self):
         # print("queryWritable",not self.client.waiting_data.empty())
@@ -165,7 +165,7 @@ class ServerAsyncore(asyncore.dispatcher):
         self.set_reuse_addr()
         self.bind((cfg.my_ip, cfg.my_listening_port))
         self.listen(5)
-        LOGGER.info("Server listening on port: " + str(cfg.my_listening_port))
+        LOGGER.info("Server listening on port: %s", cfg.my_listening_port)
 
     def handle_accept(self):
         global max_client_id
@@ -182,9 +182,9 @@ class ServerAsyncore(asyncore.dispatcher):
             clients.append(client)
             clients_mutex.release()
             handler = ClientHandler(client)
-            LOGGER.info("client accepted: {}  users now: {}".format(client, len(clients)))
+            LOGGER.info("client accepted: %s  users now: %d", client, len(clients))
         else:
-            LOGGER.info("client denied: {} blocked by ip".format(client))
+            LOGGER.info("client denied: %s blocked by ip", client)
             client.socket.close()
 
 
@@ -291,55 +291,54 @@ def handle_command(command, client):
     param = array.array("I", command[1:5])[0]
     param = socket.ntohl(param)
     command_id = command[0]
-    client_info = str(client)
     if time.time() - client.start_time < cfg.client_cant_set_until and not (cfg.first_client_can_set and client.ident == 0):
-        LOGGER.info("deny: " + client_info + " -> client can't set anything until " + str(cfg.client_cant_set_until) + " seconds")
+        LOGGER.info("deny: %s -> client can't set anything until %d seconds", client, cfg.client_cant_set_until)
         return 0
     if command_id == 1:
         if max(map((lambda r: param >= r[0] and param <= r[1]), cfg.freq_allowed_ranges)):
-            LOGGER.debug("allow: " + client_info + " -> set freq " + str(param))
+            LOGGER.debug("allow: %s -> set freq %s", client, param)
             return 1
         else:
-            LOGGER.debug("deny: " + client_info + " -> set freq - out of range: " + str(param))
+            LOGGER.debug("deny: %s -> set freq - out of range: %s", client, param)
     elif command_id == 2:
-        LOGGER.debug("deny: " + client_info + " -> set sample rate: " + str(param))
+        LOGGER.debug("deny: %s -> set sample rate: %s", client, param)
         sample_rate = param
         return 0  # ordinary clients are not allowed to do this
     elif command_id == 3:
-        LOGGER.debug("deny/allow: " + client_info + " -> set gain mode: " + str(param))
+        LOGGER.debug("deny/allow: %s -> set gain mode: %s", client, param)
         return cfg.allow_gain_set
     elif command_id == 4:
-        LOGGER.debug("deny/allow: " + client_info + " -> set gain: " + str(param))
+        LOGGER.debug("deny/allow: %s -> set gain: %s", client, param)
         return cfg.allow_gain_set
     elif command_id == 5:
-        LOGGER.debug("deny: " + client_info + " -> set freq correction: " + str(param))
+        LOGGER.debug("deny: %s -> set freq correction: %s", client, param)
         return 0
     elif command_id == 6:
-        LOGGER.debug("deny/allow: set if stage gain")
+        LOGGER.debug("deny/allow: %s -> set if stage gain", client)
         return cfg.allow_gain_set
     elif command_id == 7:
-        LOGGER.debug("deny: set test mode")
+        LOGGER.debug("deny: %s -> set test mode", client)
         return 0
     elif command_id == 8:
-        LOGGER.debug("deny/allow: set agc mode")
+        LOGGER.debug("deny/allow: %s -> set agc mode", client)
         return cfg.allow_gain_set
     elif command_id == 9:
-        LOGGER.debug("deny: set direct sampling")
+        LOGGER.debug("deny: %s -> set direct sampling", client)
         return 0
     elif command_id == 10:
-        LOGGER.debug("deny: set offset tuning")
+        LOGGER.debug("deny: %s -> set offset tuning", client)
         return 0
     elif command_id == 11:
-        LOGGER.debug("deny: set rtl xtal")
+        LOGGER.debug("deny: %s -> set rtl xtal", client)
         return 0
     elif command_id == 12:
-        LOGGER.debug("deny: set tuner xtal")
+        LOGGER.debug("deny: %s -> set tuner xtal", client)
         return 0
     elif command_id == 13:
-        LOGGER.debug("deny/allow: set tuner gain by index")
+        LOGGER.debug("deny/allow: %s -> set tuner gain by index", client)
         return cfg.allow_gain_set
     else:
-        LOGGER.debug("deny: " + client_info + " sent an ivalid command: " + str(param))
+        LOGGER.debug("deny: %s sent an ivalid command: %s", client, param)
     return 0
 
 
@@ -386,7 +385,7 @@ def dsp_debug_thread():
     global dsp_data_count
     while True:
         time.sleep(1)
-        LOGGER.debug("DSP | Original data: " + str(int(original_data_count / 1000)) + "kB/sec | Processed data: " + str(int(dsp_data_count / 1000)) + "kB/sec")
+        LOGGER.debug("DSP | Original data: %dkB/sec | Processed data: %dkB/sec", original_data_count / 1000, dsp_data_count / 1000)
         dsp_data_count = original_data_count = 0
 
 
