@@ -82,23 +82,23 @@ def add_data_to_clients(new_data):
     # -> rtl_tcp_asyncore.handle_read
     clients_mutex.acquire()
     for client in clients:
-        # print("client %d size: %d"%(client[0].ident,client[0].waiting_data.qsize()))
-        if client[0].waiting_data:
-            if client[0].waiting_data.full():
+        # print("client %d size: %d"%(client.ident,client.waiting_data.qsize()))
+        if client.waiting_data:
+            if client.waiting_data.full():
                 if cfg.cache_full_behaviour == 0:
-                    LOGGER.error("client cache full, dropping samples: " + str(client[0].ident) + "@" + client[0].socket[1][0])
-                    while not client[0].waiting_data.empty():  # clear queue
-                        client[0].waiting_data.get(False, None)
+                    LOGGER.error("client cache full, dropping samples: " + str(client.ident) + "@" + client.socket[1][0])
+                    while not client.waiting_data.empty():  # clear queue
+                        client.waiting_data.get(False, None)
                 elif cfg.cache_full_behaviour == 1:
                     # rather closing client:
-                    LOGGER.error("client cache full, dropping client: " + str(client[0].ident) + "@" + client[0].socket[1][0])
-                    client[0].close()
+                    LOGGER.error("client cache full, dropping client: " + str(client.ident) + "@" + client.socket[1][0])
+                    client.close()
                 elif cfg.cache_full_behaviour == 2:
                     pass  # client cache full, just not taking care
                 else:
                     LOGGER.error("invalid value for cfg.cache_full_behaviour")
             else:
-                client[0].waiting_data.put(new_data)
+                client.waiting_data.put(new_data)
     clients_mutex.release()
 
 
@@ -133,10 +133,10 @@ class client_handler(asyncore.dispatcher):
 
     def __init__(self, client_param):
         self.client = client_param
-        self.client[0].asyncore = self
+        self.client.asyncore = self
         self.sent_dongle_id = False
         self.last_waiting_buffer = b""
-        asyncore.dispatcher.__init__(self, self.client[0].socket[0])
+        asyncore.dispatcher.__init__(self, self.client.socket[0])
 
     def handle_read(self):
         new_command = self.recv(5)
@@ -146,25 +146,25 @@ class client_handler(asyncore.dispatcher):
 
     def handle_error(self):
         exc_type, exc_value, exc_traceback = sys.exc_info()
-        LOGGER.info("client error: " + str(self.client[0].ident) + "@" + self.client[0].socket[1][0])
+        LOGGER.info("client error: " + str(self.client.ident) + "@" + self.client.socket[1][0])
         LOGGER.exception(exc_value)
         self.close()
 
     def handle_close(self):
-        self.client[0].close()
-        LOGGER.info("client disconnected: " + str(self.client[0].ident) + "@" + self.client[0].socket[1][0])
+        self.client.close()
+        LOGGER.info("client disconnected: " + str(self.client.ident) + "@" + self.client.socket[1][0])
 
     def writable(self):
-        # print("queryWritable",not self.client[0].waiting_data.empty())
-        return not self.client[0].waiting_data.empty()
+        # print("queryWritable",not self.client.waiting_data.empty())
+        return not self.client.waiting_data.empty()
 
     def handle_write(self):
         if not self.sent_dongle_id:
             self.send(rtl_dongle_identifier)
             self.sent_dongle_id = True
             return
-        # print("write2client",self.client[0].waiting_data.qsize())
-        next = self.last_waiting_buffer + self.client[0].waiting_data.get()
+        # print("write2client",self.client.waiting_data.qsize())
+        next = self.last_waiting_buffer + self.client.waiting_data.get()
         sent = asyncore.dispatcher.send(self, next)
         self.last_waiting_buffer = next[sent:]
 
@@ -181,22 +181,22 @@ class server_asyncore(asyncore.dispatcher):
 
     def handle_accept(self):
         global max_client_id
-        my_client = [client()]
-        my_client[0].socket = self.accept()
-        if my_client[0].socket is None:  # not sure if required
+        my_client = client()
+        my_client.socket = self.accept()
+        if my_client.socket is None:  # not sure if required
             return
-        if ip_access_control(my_client[0].socket[1][0]):
-            my_client[0].ident = max_client_id
+        if ip_access_control(my_client.socket[1][0]):
+            my_client.ident = max_client_id
             max_client_id += 1
-            my_client[0].start_time = time.time()
-            my_client[0].waiting_data = multiprocessing.Queue(250)
+            my_client.start_time = time.time()
+            my_client.waiting_data = multiprocessing.Queue(250)
             clients_mutex.acquire()
             clients.append(my_client)
             clients_mutex.release()
             handler = client_handler(my_client)
-            LOGGER.info("client accepted: " + str(len(clients) - 1) + "@" + my_client[0].socket[1][0] + ":" + str(my_client[0].socket[1][1]) + "  users now: " + str(len(clients)))
+            LOGGER.info("client accepted: " + str(len(clients) - 1) + "@" + my_client.socket[1][0] + ":" + str(my_client.socket[1][1]) + "  users now: " + str(len(clients)))
         else:
-            LOGGER.info("client denied: " + str(len(clients) - 1) + "@" + my_client[0].socket[1][0] + ":" + str(my_client[0].socket[1][1]) + " blocked by ip")
+            LOGGER.info("client denied: " + str(len(clients) - 1) + "@" + my_client.socket[1][0] + ":" + str(my_client.socket[1][1]) + " blocked by ip")
             my_client.socket.close()
 
 
@@ -298,9 +298,8 @@ class rtl_tcp_asyncore(asyncore.dispatcher):
             self.send(mcmd)
 
 
-def handle_command(command, client_param):
+def handle_command(command, client):
     global sample_rate
-    client = client_param[0]
     param = array.array("I", command[1:5])[0]
     param = socket.ntohl(param)
     command_id = command[0]
@@ -413,8 +412,8 @@ class client:
 
     def close(self):
         clients_mutex.acquire()
-        for i in range(0, len(clients)):
-            if clients[i][0].ident == self.ident:
+        for client in clients:
+            if client.ident == self.ident:
                 try:
                     self.socket[0].close()
                 except Exception:
