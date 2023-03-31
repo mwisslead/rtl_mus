@@ -70,23 +70,7 @@ def add_data_to_clients(new_data):
     # -> rtl_tcp_asyncore.handle_read
     clients_mutex.acquire()
     for client in clients:
-        # print("client %d size: %d"%(client.ident,client.waiting_data.qsize()))
-        if client.waiting_data:
-            if client.waiting_data.full():
-                if cfg.cache_full_behaviour == 0:
-                    LOGGER.error("client cache full, dropping samples: %s", client)
-                    while not client.waiting_data.empty():  # clear queue
-                        client.waiting_data.get(False, None)
-                elif cfg.cache_full_behaviour == 1:
-                    # rather closing client:
-                    LOGGER.error("client cache full, dropping client: %s", client)
-                    client.close()
-                elif cfg.cache_full_behaviour == 2:
-                    pass  # client cache full, just not taking care
-                else:
-                    LOGGER.error("invalid value for cfg.cache_full_behaviour")
-            else:
-                client.waiting_data.put(new_data)
+        client.add_data(new_data)
     clients_mutex.release()
 
 
@@ -127,10 +111,65 @@ class ClientHandler(asyncore.dispatcher):
         asyncore.dispatcher.__init__(self, self.client.socket)
 
     def handle_read(self):
-        new_command = self.recv(5)
-        if len(new_command) >= 5:
-            if handle_command(bytearray(new_command), self.client):
-                commands.put(new_command)
+        command = bytearray(self.recv(5))
+        if len(command) >= 5:
+            if self.command_allowed(command):
+                commands.put(command)
+
+    def command_allowed(self, command):
+        global sample_rate
+        param = array.array("I", command[1:5])[0]
+        param = socket.ntohl(param)
+        command_id = command[0]
+        if time.time() - self.client.start_time < cfg.client_cant_set_until and not (cfg.first_client_can_set and self.client.ident == 0):
+            LOGGER.info("deny: %s -> client can't set anything until %d seconds", self.client, cfg.client_cant_set_until)
+            return 0
+        if command_id == 1:
+            if max(map((lambda r: param >= r[0] and param <= r[1]), cfg.freq_allowed_ranges)):
+                LOGGER.debug("allow: %s -> set freq %s", self.client, param)
+                return 1
+            else:
+                LOGGER.debug("deny: %s -> set freq - out of range: %s", self.client, param)
+        elif command_id == 2:
+            LOGGER.debug("deny: %s -> set sample rate: %s", self.client, param)
+            sample_rate = param
+            return 0  # ordinary clients are not allowed to do this
+        elif command_id == 3:
+            LOGGER.debug("deny/allow: %s -> set gain mode: %s", self.client, param)
+            return cfg.allow_gain_set
+        elif command_id == 4:
+            LOGGER.debug("deny/allow: %s -> set gain: %s", self.client, param)
+            return cfg.allow_gain_set
+        elif command_id == 5:
+            LOGGER.debug("deny: %s -> set freq correction: %s", self.client, param)
+            return 0
+        elif command_id == 6:
+            LOGGER.debug("deny/allow: %s -> set if stage gain", self.client)
+            return cfg.allow_gain_set
+        elif command_id == 7:
+            LOGGER.debug("deny: %s -> set test mode", self.client)
+            return 0
+        elif command_id == 8:
+            LOGGER.debug("deny/allow: %s -> set agc mode", self.client)
+            return cfg.allow_gain_set
+        elif command_id == 9:
+            LOGGER.debug("deny: %s -> set direct sampling", self.client)
+            return 0
+        elif command_id == 10:
+            LOGGER.debug("deny: %s -> set offset tuning", self.client)
+            return 0
+        elif command_id == 11:
+            LOGGER.debug("deny: %s -> set rtl xtal", self.client)
+            return 0
+        elif command_id == 12:
+            LOGGER.debug("deny: %s -> set tuner xtal", self.client)
+            return 0
+        elif command_id == 13:
+            LOGGER.debug("deny/allow: %s -> set tuner gain by index", self.client)
+            return cfg.allow_gain_set
+        else:
+            LOGGER.debug("deny: %s sent an ivalid command: %s", self.client, param)
+        return 0
 
     def handle_error(self):
         exc_type, exc_value, exc_traceback = sys.exc_info()
@@ -160,6 +199,7 @@ class ClientHandler(asyncore.dispatcher):
 class ServerAsyncore(asyncore.dispatcher):
 
     def __init__(self):
+        self.client_count = 0
         asyncore.dispatcher.__init__(self)
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.set_reuse_addr()
@@ -168,14 +208,13 @@ class ServerAsyncore(asyncore.dispatcher):
         LOGGER.info("Server listening on port: %s", cfg.my_listening_port)
 
     def handle_accept(self):
-        global max_client_id
         accept = self.accept()
         if accept is None:  # not sure if required
             return
         socket, (addr, port) = accept
-        client = Client(socket, addr, port, max_client_id)
+        client = Client(socket, addr, port, self.client_count)
         if ip_access_control(client.addr):
-            max_client_id += 1
+            self.client_count += 1
             client.start_time = time.time()
             client.waiting_data = multiprocessing.Queue(250)
             clients_mutex.acquire()
@@ -286,62 +325,6 @@ class RtlTcpAsyncore(asyncore.dispatcher):
             self.send(mcmd)
 
 
-def handle_command(command, client):
-    global sample_rate
-    param = array.array("I", command[1:5])[0]
-    param = socket.ntohl(param)
-    command_id = command[0]
-    if time.time() - client.start_time < cfg.client_cant_set_until and not (cfg.first_client_can_set and client.ident == 0):
-        LOGGER.info("deny: %s -> client can't set anything until %d seconds", client, cfg.client_cant_set_until)
-        return 0
-    if command_id == 1:
-        if max(map((lambda r: param >= r[0] and param <= r[1]), cfg.freq_allowed_ranges)):
-            LOGGER.debug("allow: %s -> set freq %s", client, param)
-            return 1
-        else:
-            LOGGER.debug("deny: %s -> set freq - out of range: %s", client, param)
-    elif command_id == 2:
-        LOGGER.debug("deny: %s -> set sample rate: %s", client, param)
-        sample_rate = param
-        return 0  # ordinary clients are not allowed to do this
-    elif command_id == 3:
-        LOGGER.debug("deny/allow: %s -> set gain mode: %s", client, param)
-        return cfg.allow_gain_set
-    elif command_id == 4:
-        LOGGER.debug("deny/allow: %s -> set gain: %s", client, param)
-        return cfg.allow_gain_set
-    elif command_id == 5:
-        LOGGER.debug("deny: %s -> set freq correction: %s", client, param)
-        return 0
-    elif command_id == 6:
-        LOGGER.debug("deny/allow: %s -> set if stage gain", client)
-        return cfg.allow_gain_set
-    elif command_id == 7:
-        LOGGER.debug("deny: %s -> set test mode", client)
-        return 0
-    elif command_id == 8:
-        LOGGER.debug("deny/allow: %s -> set agc mode", client)
-        return cfg.allow_gain_set
-    elif command_id == 9:
-        LOGGER.debug("deny: %s -> set direct sampling", client)
-        return 0
-    elif command_id == 10:
-        LOGGER.debug("deny: %s -> set offset tuning", client)
-        return 0
-    elif command_id == 11:
-        LOGGER.debug("deny: %s -> set rtl xtal", client)
-        return 0
-    elif command_id == 12:
-        LOGGER.debug("deny: %s -> set tuner xtal", client)
-        return 0
-    elif command_id == 13:
-        LOGGER.debug("deny/allow: %s -> set tuner gain by index", client)
-        return cfg.allow_gain_set
-    else:
-        LOGGER.debug("deny: %s sent an ivalid command: %s", client, param)
-    return 0
-
-
 def watchdog_thread():
     global rtl_tcp_connected
     global watchdog_data_count
@@ -419,6 +402,25 @@ class Client:
                 break
         clients_mutex.release()
 
+    def add_data(self, data):
+        # print("self %d size: %d"%(self.ident,self.waiting_data.qsize()))
+        if self.waiting_data:
+            if self.waiting_data.full():
+                if cfg.cache_full_behaviour == 0:
+                    LOGGER.error("client cache full, dropping samples: %s", self)
+                    while not self.waiting_data.empty():  # clear queue
+                        self.waiting_data.get(False, None)
+                elif cfg.cache_full_behaviour == 1:
+                    # rather closing client:
+                    LOGGER.error("client cache full, dropping client: %s", self)
+                    self.close()
+                elif cfg.cache_full_behaviour == 2:
+                    pass  # client cache full, just not taking care
+                else:
+                    LOGGER.error("invalid value for cfg.cache_full_behaviour")
+            else:
+                self.waiting_data.put(data)
+
     def __str__(self):
         return '{}@{}:{}'.format(self.ident, self.addr, self.port)
 
@@ -433,7 +435,6 @@ def main():
     global dsp_data_count
     global proc
     global commands
-    global max_client_id
     global rtl_tcp_core
     global sample_rate
 
@@ -457,7 +458,6 @@ def main():
     commands = multiprocessing.Queue()
     dsp_input_queue = multiprocessing.Queue()
     clients_mutex = multiprocessing.Lock()
-    max_client_id = 0
     sample_rate = 250000  # so far only watchdog thread uses it to fill buffer up with zeros on missing input
 
     # start dsp threads
