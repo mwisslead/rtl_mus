@@ -87,14 +87,17 @@ def dsp_write_thread():
             original_data_count += len(my_buffer)
 
 
-class ClientHandler(asyncore.dispatcher):
+class Client(asyncore.dispatcher):
 
-    def __init__(self, client_param):
-        self.client = client_param
-        self.client.asyncore = self
+    def __init__(self, socket, addr, port, identifier):
+        self.ident = identifier
+        self.waiting_data = multiprocessing.Queue(250)
+        self.start_time = time.time()
+        self.address = addr
+        self.port = port
         self.sent_dongle_id = False
         self.last_waiting_buffer = b""
-        asyncore.dispatcher.__init__(self, self.client.socket)
+        asyncore.dispatcher.__init__(self, socket)
 
     def handle_read(self):
         command = bytearray(self.recv(5))
@@ -107,79 +110,105 @@ class ClientHandler(asyncore.dispatcher):
         param = array.array("I", command[1:5])[0]
         param = socket.ntohl(param)
         command_id = command[0]
-        if time.time() - self.client.start_time < cfg.client_cant_set_until and not (cfg.first_client_can_set and self.client.ident == 0):
-            LOGGER.info("deny: %s -> client can't set anything until %d seconds", self.client, cfg.client_cant_set_until)
+        if time.time() - self.start_time < cfg.client_cant_set_until and not (cfg.first_client_can_set and self.ident == 0):
+            LOGGER.info("deny: %s -> client can't set anything until %d seconds", self, cfg.client_cant_set_until)
             return 0
         if command_id == 1:
             if max(map((lambda r: param >= r[0] and param <= r[1]), cfg.freq_allowed_ranges)):
-                LOGGER.debug("allow: %s -> set freq %s", self.client, param)
+                LOGGER.debug("allow: %s -> set freq %s", self, param)
                 return 1
             else:
-                LOGGER.debug("deny: %s -> set freq - out of range: %s", self.client, param)
+                LOGGER.debug("deny: %s -> set freq - out of range: %s", self, param)
         elif command_id == 2:
-            LOGGER.debug("deny: %s -> set sample rate: %s", self.client, param)
+            LOGGER.debug("deny: %s -> set sample rate: %s", self, param)
             sample_rate = param
             return 0  # ordinary clients are not allowed to do this
         elif command_id == 3:
-            LOGGER.debug("deny/allow: %s -> set gain mode: %s", self.client, param)
+            LOGGER.debug("deny/allow: %s -> set gain mode: %s", self, param)
             return cfg.allow_gain_set
         elif command_id == 4:
-            LOGGER.debug("deny/allow: %s -> set gain: %s", self.client, param)
+            LOGGER.debug("deny/allow: %s -> set gain: %s", self, param)
             return cfg.allow_gain_set
         elif command_id == 5:
-            LOGGER.debug("deny: %s -> set freq correction: %s", self.client, param)
+            LOGGER.debug("deny: %s -> set freq correction: %s", self, param)
             return 0
         elif command_id == 6:
-            LOGGER.debug("deny/allow: %s -> set if stage gain", self.client)
+            LOGGER.debug("deny/allow: %s -> set if stage gain", self)
             return cfg.allow_gain_set
         elif command_id == 7:
-            LOGGER.debug("deny: %s -> set test mode", self.client)
+            LOGGER.debug("deny: %s -> set test mode", self)
             return 0
         elif command_id == 8:
-            LOGGER.debug("deny/allow: %s -> set agc mode", self.client)
+            LOGGER.debug("deny/allow: %s -> set agc mode", self)
             return cfg.allow_gain_set
         elif command_id == 9:
-            LOGGER.debug("deny: %s -> set direct sampling", self.client)
+            LOGGER.debug("deny: %s -> set direct sampling", self)
             return 0
         elif command_id == 10:
-            LOGGER.debug("deny: %s -> set offset tuning", self.client)
+            LOGGER.debug("deny: %s -> set offset tuning", self)
             return 0
         elif command_id == 11:
-            LOGGER.debug("deny: %s -> set rtl xtal", self.client)
+            LOGGER.debug("deny: %s -> set rtl xtal", self)
             return 0
         elif command_id == 12:
-            LOGGER.debug("deny: %s -> set tuner xtal", self.client)
+            LOGGER.debug("deny: %s -> set tuner xtal", self)
             return 0
         elif command_id == 13:
-            LOGGER.debug("deny/allow: %s -> set tuner gain by index", self.client)
+            LOGGER.debug("deny/allow: %s -> set tuner gain by index", self)
             return cfg.allow_gain_set
         else:
-            LOGGER.debug("deny: %s sent an ivalid command: %s", self.client, param)
+            LOGGER.debug("deny: %s sent an ivalid command: %s", self, param)
         return 0
 
     def handle_error(self):
         exc_type, exc_value, exc_traceback = sys.exc_info()
-        LOGGER.info("client error: %s", self.client)
+        LOGGER.info("client error: %s", self)
         LOGGER.exception(exc_value)
         self.close()
 
     def handle_close(self):
-        self.client.close()
-        LOGGER.info("client disconnected: %s", self.client)
+        self.close()
+        LOGGER.info("client disconnected: %s", self)
 
     def writable(self):
-        # print("queryWritable",not self.client.waiting_data.empty())
-        return not self.client.waiting_data.empty()
+        # print("queryWritable",not self.waiting_data.empty())
+        return not self.waiting_data.empty()
 
     def handle_write(self):
         if not self.sent_dongle_id:
             self.send(rtl_dongle_identifier)
             self.sent_dongle_id = True
             return
-        # print("write2client",self.client.waiting_data.qsize())
-        next = self.last_waiting_buffer + self.client.waiting_data.get()
+        # print("write2client",self.waiting_data.qsize())
+        next = self.last_waiting_buffer + self.waiting_data.get()
         sent = asyncore.dispatcher.send(self, next)
         self.last_waiting_buffer = next[sent:]
+
+    def close(self):
+        SERVER.remove_client(self)
+        asyncore.dispatcher.close(self)
+
+    def add_data(self, data):
+        # print("self %d size: %d"%(self.ident,self.waiting_data.qsize()))
+        if self.waiting_data:
+            if self.waiting_data.full():
+                if cfg.cache_full_behaviour == 0:
+                    LOGGER.error("client cache full, dropping samples: %s", self)
+                    while not self.waiting_data.empty():  # clear queue
+                        self.waiting_data.get(False, None)
+                elif cfg.cache_full_behaviour == 1:
+                    # rather closing client:
+                    LOGGER.error("client cache full, dropping client: %s", self)
+                    self.close()
+                elif cfg.cache_full_behaviour == 2:
+                    pass  # client cache full, just not taking care
+                else:
+                    LOGGER.error("invalid value for cfg.cache_full_behaviour")
+            else:
+                self.waiting_data.put(data)
+
+    def __str__(self):
+        return '{}@{}:{}'.format(self.ident, self.address, self.port)
 
 
 class ServerAsyncore(asyncore.dispatcher):
@@ -200,19 +229,16 @@ class ServerAsyncore(asyncore.dispatcher):
         if accept is None:  # not sure if required
             return
         socket, (addr, port) = accept
-        client = Client(socket, addr, port, self.client_count)
-        if ip_access_control(client.addr):
+        if ip_access_control(addr):
+            client = Client(socket, addr, port, self.client_count)
             self.client_count += 1
-            client.start_time = time.time()
-            client.waiting_data = multiprocessing.Queue(250)
             self.clients_mutex.acquire()
             self.clients.add(client)
             LOGGER.info("client accepted: %s  users now: %d", client, len(self.clients))
             self.clients_mutex.release()
-            handler = ClientHandler(client)
         else:
-            LOGGER.info("client denied: %s blocked by ip", client)
-            client.socket.close()
+            LOGGER.info("client denied: %s blocked by ip", addr)
+            socket.close()
 
     def add_data_to_clients(self, data):
         # might be called from:
@@ -373,55 +399,6 @@ def dsp_debug_thread():
         time.sleep(1)
         LOGGER.debug("DSP | Original data: %dkB/sec | Processed data: %dkB/sec", original_data_count / 1000, dsp_data_count / 1000)
         dsp_data_count = original_data_count = 0
-
-
-class Client:
-
-    def __init__(self, socket, addr, port, identifier):
-        self.ident = identifier
-        self.waiting_data = None
-        self.start_time = None
-        self.socket = socket
-        self.asyncore = None
-        self.addr = addr
-        self.port = port
-
-    def close(self):
-        SERVER.remove_client(self)
-        try:
-            self.socket.close()
-        except Exception:
-            pass
-        try:
-            self.asyncore.close()
-            del self.asyncore
-        except Exception:
-            pass
-        if self.waiting_data:
-            self.waiting_data.close()
-            self.waiting_data = None
-
-    def add_data(self, data):
-        # print("self %d size: %d"%(self.ident,self.waiting_data.qsize()))
-        if self.waiting_data:
-            if self.waiting_data.full():
-                if cfg.cache_full_behaviour == 0:
-                    LOGGER.error("client cache full, dropping samples: %s", self)
-                    while not self.waiting_data.empty():  # clear queue
-                        self.waiting_data.get(False, None)
-                elif cfg.cache_full_behaviour == 1:
-                    # rather closing client:
-                    LOGGER.error("client cache full, dropping client: %s", self)
-                    self.close()
-                elif cfg.cache_full_behaviour == 2:
-                    pass  # client cache full, just not taking care
-                else:
-                    LOGGER.error("invalid value for cfg.cache_full_behaviour")
-            else:
-                self.waiting_data.put(data)
-
-    def __str__(self):
-        return '{}@{}:{}'.format(self.ident, self.addr, self.port)
 
 
 def main():
