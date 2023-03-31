@@ -74,12 +74,12 @@ def add_data_to_clients(new_data):
         if client.waiting_data:
             if client.waiting_data.full():
                 if cfg.cache_full_behaviour == 0:
-                    LOGGER.error("client cache full, dropping samples: " + str(client.ident) + "@" + client.socket[1][0])
+                    LOGGER.error("client cache full, dropping samples: {}".format(client))
                     while not client.waiting_data.empty():  # clear queue
                         client.waiting_data.get(False, None)
                 elif cfg.cache_full_behaviour == 1:
                     # rather closing client:
-                    LOGGER.error("client cache full, dropping client: " + str(client.ident) + "@" + client.socket[1][0])
+                    LOGGER.error("client cache full, dropping client: {}".format(client))
                     client.close()
                 elif cfg.cache_full_behaviour == 2:
                     pass  # client cache full, just not taking care
@@ -124,7 +124,7 @@ class ClientHandler(asyncore.dispatcher):
         self.client.asyncore = self
         self.sent_dongle_id = False
         self.last_waiting_buffer = b""
-        asyncore.dispatcher.__init__(self, self.client.socket[0])
+        asyncore.dispatcher.__init__(self, self.client.socket)
 
     def handle_read(self):
         new_command = self.recv(5)
@@ -134,13 +134,13 @@ class ClientHandler(asyncore.dispatcher):
 
     def handle_error(self):
         exc_type, exc_value, exc_traceback = sys.exc_info()
-        LOGGER.info("client error: " + str(self.client.ident) + "@" + self.client.socket[1][0])
+        LOGGER.info("client error: {}".format(self.client))
         LOGGER.exception(exc_value)
         self.close()
 
     def handle_close(self):
         self.client.close()
-        LOGGER.info("client disconnected: " + str(self.client.ident) + "@" + self.client.socket[1][0])
+        LOGGER.info("client disconnected: {}".format(self.client))
 
     def writable(self):
         # print("queryWritable",not self.client.waiting_data.empty())
@@ -169,12 +169,12 @@ class ServerAsyncore(asyncore.dispatcher):
 
     def handle_accept(self):
         global max_client_id
-        client = Client()
-        client.socket = self.accept()
-        if client.socket is None:  # not sure if required
+        accept = self.accept()
+        if accept is None:  # not sure if required
             return
-        if ip_access_control(client.socket[1][0]):
-            client.ident = max_client_id
+        socket, (addr, port) = accept
+        client = Client(socket, addr, port, max_client_id)
+        if ip_access_control(client.addr):
             max_client_id += 1
             client.start_time = time.time()
             client.waiting_data = multiprocessing.Queue(250)
@@ -182,10 +182,10 @@ class ServerAsyncore(asyncore.dispatcher):
             clients.append(client)
             clients_mutex.release()
             handler = ClientHandler(client)
-            LOGGER.info("client accepted: " + str(len(clients) - 1) + "@" + client.socket[1][0] + ":" + str(client.socket[1][1]) + "  users now: " + str(len(clients)))
+            LOGGER.info("client accepted: {}  users now: {}".format(client, len(clients)))
         else:
-            LOGGER.info("client denied: " + str(len(clients) - 1) + "@" + client.socket[1][0] + ":" + str(client.socket[1][1]) + " blocked by ip")
-            client.socket[0].close()
+            LOGGER.info("client denied: {} blocked by ip".format(client))
+            client.socket.close()
 
 
 rtl_tcp_resetting = False  # put me away
@@ -291,7 +291,7 @@ def handle_command(command, client):
     param = array.array("I", command[1:5])[0]
     param = socket.ntohl(param)
     command_id = command[0]
-    client_info = str(client.ident) + "@" + client.socket[1][0] + ":" + str(client.socket[1][1])
+    client_info = str(client)
     if time.time() - client.start_time < cfg.client_cant_set_until and not (cfg.first_client_can_set and client.ident == 0):
         LOGGER.info("deny: " + client_info + " -> client can't set anything until " + str(cfg.client_cant_set_until) + " seconds")
         return 0
@@ -391,19 +391,22 @@ def dsp_debug_thread():
 
 
 class Client:
-    ident = None  # id
-    to_close = False
-    waiting_data = None
-    start_time = None
-    socket = None
-    asyncore = None
+
+    def __init__(self, socket, addr, port, identifier):
+        self.ident = identifier
+        self.waiting_data = None
+        self.start_time = None
+        self.socket = socket
+        self.asyncore = None
+        self.addr = addr
+        self.port = port
 
     def close(self):
         clients_mutex.acquire()
         for client in clients:
             if client.ident == self.ident:
                 try:
-                    self.socket[0].close()
+                    self.socket.close()
                 except Exception:
                     pass
                 try:
@@ -416,6 +419,9 @@ class Client:
                     self.waiting_data = None
                 break
         clients_mutex.release()
+
+    def __str__(self):
+        return '{}@{}:{}'.format(self.ident, self.addr, self.port)
 
 
 def main():
