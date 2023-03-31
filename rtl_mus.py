@@ -129,7 +129,7 @@ def dsp_write_thread():
             original_data_count += len(my_buffer)
 
 
-class client_handler(asyncore.dispatcher):
+class ClientHandler(asyncore.dispatcher):
 
     def __init__(self, client_param):
         self.client = client_param
@@ -169,7 +169,7 @@ class client_handler(asyncore.dispatcher):
         self.last_waiting_buffer = next[sent:]
 
 
-class server_asyncore(asyncore.dispatcher):
+class ServerAsyncore(asyncore.dispatcher):
 
     def __init__(self):
         asyncore.dispatcher.__init__(self)
@@ -181,23 +181,23 @@ class server_asyncore(asyncore.dispatcher):
 
     def handle_accept(self):
         global max_client_id
-        my_client = client()
-        my_client.socket = self.accept()
-        if my_client.socket is None:  # not sure if required
+        client = Client()
+        client.socket = self.accept()
+        if client.socket is None:  # not sure if required
             return
-        if ip_access_control(my_client.socket[1][0]):
-            my_client.ident = max_client_id
+        if ip_access_control(client.socket[1][0]):
+            client.ident = max_client_id
             max_client_id += 1
-            my_client.start_time = time.time()
-            my_client.waiting_data = multiprocessing.Queue(250)
+            client.start_time = time.time()
+            client.waiting_data = multiprocessing.Queue(250)
             clients_mutex.acquire()
-            clients.append(my_client)
+            clients.append(client)
             clients_mutex.release()
-            handler = client_handler(my_client)
-            LOGGER.info("client accepted: " + str(len(clients) - 1) + "@" + my_client.socket[1][0] + ":" + str(my_client.socket[1][1]) + "  users now: " + str(len(clients)))
+            handler = ClientHandler(client)
+            LOGGER.info("client accepted: " + str(len(clients) - 1) + "@" + client.socket[1][0] + ":" + str(client.socket[1][1]) + "  users now: " + str(len(clients)))
         else:
-            LOGGER.info("client denied: " + str(len(clients) - 1) + "@" + my_client.socket[1][0] + ":" + str(my_client.socket[1][1]) + " blocked by ip")
-            my_client.socket.close()
+            LOGGER.info("client denied: " + str(len(clients) - 1) + "@" + client.socket[1][0] + ":" + str(client.socket[1][1]) + " blocked by ip")
+            client.socket.close()
 
 
 rtl_tcp_resetting = False  # put me away
@@ -219,12 +219,12 @@ def rtl_tcp_asyncore_reset(timeout):
         del rtl_tcp_core
     except Exception:
         pass
-    rtl_tcp_core = rtl_tcp_asyncore()
+    rtl_tcp_core = RtlTcpAsyncore()
     # print(asyncore.socket_map)
     rtl_tcp_resetting = False
 
 
-class rtl_tcp_asyncore(asyncore.dispatcher):
+class RtlTcpAsyncore(asyncore.dispatcher):
     def __init__(self):
         asyncore.dispatcher.__init__(self)
         self.ok = True
@@ -402,7 +402,7 @@ def dsp_debug_thread():
         dsp_data_count = original_data_count = 0
 
 
-class client:
+class Client:
     ident = None  # id
     to_close = False
     waiting_data = None
@@ -481,8 +481,8 @@ def main():
         watchdog_thread_v = thread.start_new_thread(watchdog_thread, ())
 
     # start asyncores
-    rtl_tcp_core = rtl_tcp_asyncore()
-    server_core = server_asyncore()
+    rtl_tcp_core = RtlTcpAsyncore()
+    server_core = ServerAsyncore()
 
     asyncore.loop(0.1)
 
