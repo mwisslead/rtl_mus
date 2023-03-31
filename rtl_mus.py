@@ -24,11 +24,7 @@ along with RTL Multi-User Server.  If not, see <http://www.gnu.org/licenses/>.
 
 '''
 
-<<<<<<< HEAD
 from __future__ import print_function, unicode_literals
-=======
-from __future__ import print_function
->>>>>>> d5e6c10 (Apply autopep8)
 import socket
 import sys
 import array
@@ -64,16 +60,6 @@ def ip_access_control(ip):
         return True if allowed else not denied
 
 
-def add_data_to_clients(new_data):
-    # might be called from:
-    # -> dsp_read
-    # -> rtl_tcp_asyncore.handle_read
-    clients_mutex.acquire()
-    for client in clients:
-        client.add_data(new_data)
-    clients_mutex.release()
-
-
 def dsp_read_thread():
     global dsp_data_count
     while True:
@@ -83,7 +69,7 @@ def dsp_read_thread():
             LOGGER.error("DSP subprocess is not ready for reading.")
             time.sleep(1)
             continue
-        add_data_to_clients(my_buffer)
+        SERVER.add_data_to_clients(my_buffer)
         if cfg.debug_dsp_command:
             dsp_data_count += len(my_buffer)
 
@@ -199,6 +185,8 @@ class ClientHandler(asyncore.dispatcher):
 class ServerAsyncore(asyncore.dispatcher):
 
     def __init__(self):
+        self.clients = set()
+        self.clients_mutex = multiprocessing.Lock()
         self.client_count = 0
         asyncore.dispatcher.__init__(self)
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -217,14 +205,29 @@ class ServerAsyncore(asyncore.dispatcher):
             self.client_count += 1
             client.start_time = time.time()
             client.waiting_data = multiprocessing.Queue(250)
-            clients_mutex.acquire()
-            clients.append(client)
-            clients_mutex.release()
+            self.clients_mutex.acquire()
+            self.clients.add(client)
+            LOGGER.info("client accepted: %s  users now: %d", client, len(self.clients))
+            self.clients_mutex.release()
             handler = ClientHandler(client)
-            LOGGER.info("client accepted: %s  users now: %d", client, len(clients))
         else:
             LOGGER.info("client denied: %s blocked by ip", client)
             client.socket.close()
+
+    def add_data_to_clients(self, data):
+        # might be called from:
+        # -> dsp_read
+        # -> rtl_tcp_asyncore.handle_read
+        # -> watchdog filling missing data
+        self.clients_mutex.acquire()
+        for client in self.clients:
+            client.add_data(data)
+        self.clients_mutex.release()
+
+    def remove_client(self, client):
+        self.clients_mutex.acquire()
+        self.clients.remove(client)
+        self.clients_mutex.release()
 
 
 rtl_tcp_resetting = False  # put me away
@@ -313,7 +316,7 @@ class RtlTcpAsyncore(asyncore.dispatcher):
             dsp_input_queue.put(new_data_buffer)
             # print("did put anyway")
         else:
-            add_data_to_clients(new_data_buffer)
+            SERVER.add_data_to_clients(new_data_buffer)
 
     def writable(self):
         # check if any new commands to write
@@ -346,7 +349,7 @@ def watchdog_thread():
             while wait_altogether > 0:
                 wait_altogether -= 1.0 / second_frac
                 for i in range((2 * sample_rate) // (second_frac * zero_buffer_size)):
-                    add_data_to_clients(zero_buffer)
+                    SERVER.add_data_to_clients(zero_buffer)
                     n += len(zero_buffer)
                     time.sleep(0)  # yield
                     if watchdog_data_count:
@@ -384,23 +387,19 @@ class Client:
         self.port = port
 
     def close(self):
-        clients_mutex.acquire()
-        for client in clients:
-            if client.ident == self.ident:
-                try:
-                    self.socket.close()
-                except Exception:
-                    pass
-                try:
-                    self.asyncore.close()
-                    del self.asyncore
-                except Exception:
-                    pass
-                if self.waiting_data:
-                    self.waiting_data.close()
-                    self.waiting_data = None
-                break
-        clients_mutex.release()
+        SERVER.remove_client(self)
+        try:
+            self.socket.close()
+        except Exception:
+            pass
+        try:
+            self.asyncore.close()
+            del self.asyncore
+        except Exception:
+            pass
+        if self.waiting_data:
+            self.waiting_data.close()
+            self.waiting_data = None
 
     def add_data(self, data):
         # print("self %d size: %d"%(self.ident,self.waiting_data.qsize()))
@@ -428,14 +427,12 @@ class Client:
 def main():
     global server_missing_logged
     global rtl_dongle_identifier
-    global clients
-    global clients_mutex
     global original_data_count
     global dsp_input_queue
     global dsp_data_count
     global proc
     global commands
-    global rtl_tcp_core
+    global rtl_tcp_core, SERVER
     global sample_rate
 
     # set up logging
@@ -453,11 +450,9 @@ def main():
 
     server_missing_logged = 0  # Not to flood the screen with messages related to rtl_tcp disconnect
     rtl_dongle_identifier = b''  # rtl_tcp sends some identifier on dongle type and gain values in the first few bytes right after connection
-    clients = []
     dsp_data_count = original_data_count = 0
     commands = multiprocessing.Queue()
     dsp_input_queue = multiprocessing.Queue()
-    clients_mutex = multiprocessing.Lock()
     sample_rate = 250000  # so far only watchdog thread uses it to fill buffer up with zeros on missing input
 
     # start dsp threads
@@ -475,7 +470,7 @@ def main():
 
     # start asyncores
     rtl_tcp_core = RtlTcpAsyncore()
-    server_core = ServerAsyncore()
+    SERVER = ServerAsyncore()
 
     asyncore.loop(0.1)
 
