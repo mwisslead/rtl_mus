@@ -42,6 +42,9 @@ import multiprocessing
 
 import traceback
 
+LOGGER = logging.getLogger("rtl_mus")
+
+
 def ip_match(this,ip_ranges,for_allow):
 	if not len(ip_ranges):
 		return 1 #empty list matches all ip addresses
@@ -74,16 +77,16 @@ def add_data_to_clients(new_data):
 		if client[0].waiting_data:
 			if(client[0].waiting_data.full()):
 				if cfg.cache_full_behaviour == 0:
-					log.error("client cache full, dropping samples: "+str(client[0].ident)+"@"+client[0].socket[1][0])
+					LOGGER.error("client cache full, dropping samples: "+str(client[0].ident)+"@"+client[0].socket[1][0])
 					while not client[0].waiting_data.empty(): # clear queue
 						client[0].waiting_data.get(False, None)
 				elif cfg.cache_full_behaviour == 1:
 					#rather closing client:
-					log.error("client cache full, dropping client: "+str(client[0].ident)+"@"+client[0].socket[1][0])
+					LOGGER.error("client cache full, dropping client: "+str(client[0].ident)+"@"+client[0].socket[1][0])
 					client[0].close()
 				elif cfg.cache_full_behaviour == 2:
 					pass #client cache full, just not taking care
-				else: log.error("invalid value for cfg.cache_full_behaviour")
+				else: LOGGER.error("invalid value for cfg.cache_full_behaviour")
 			else:
 				client[0].waiting_data.put(new_data)
 	clients_mutex.release()
@@ -94,7 +97,7 @@ def dsp_read_thread():
 		try:
 			my_buffer=proc.stdout.read(1024)
 		except IOError:
-			log.error("DSP subprocess is not ready for reading.")
+			LOGGER.error("DSP subprocess is not ready for reading.")
 			time.sleep(1)
 			continue
 		add_data_to_clients(my_buffer)
@@ -130,13 +133,13 @@ class client_handler(asyncore.dispatcher):
 
 	def handle_error(self):
 		exc_type, exc_value, exc_traceback = sys.exc_info()
-		log.info("client error: "+str(self.client[0].ident)+"@"+self.client[0].socket[1][0])
-		traceback.print_tb(exc_traceback)
+		LOGGER.info("client error: "+str(self.client[0].ident)+"@"+self.client[0].socket[1][0])
+		LOGGER.exception(exc_value)
 		self.close()
 
 	def handle_close(self):
 		self.client[0].close()
-		log.info("client disconnected: "+str(self.client[0].ident)+"@"+self.client[0].socket[1][0])
+		LOGGER.info("client disconnected: "+str(self.client[0].ident)+"@"+self.client[0].socket[1][0])
 
 	def writable(self):
 		#print("queryWritable",not self.client[0].waiting_data.empty())
@@ -160,7 +163,7 @@ class server_asyncore(asyncore.dispatcher):
 		self.set_reuse_addr()
 		self.bind((cfg.my_ip, cfg.my_listening_port))
 		self.listen(5)
-		log.info("Server listening on port: "+str(cfg.my_listening_port))
+		LOGGER.info("Server listening on port: "+str(cfg.my_listening_port))
 
 	def handle_accept(self):
 		global max_client_id
@@ -177,9 +180,9 @@ class server_asyncore(asyncore.dispatcher):
 			clients.append(my_client)
 			clients_mutex.release()
 			handler = client_handler(my_client)
-			log.info("client accepted: "+str(len(clients)-1)+"@"+my_client[0].socket[1][0]+":"+str(my_client[0].socket[1][1])+"  users now: "+str(len(clients)))
+			LOGGER.info("client accepted: "+str(len(clients)-1)+"@"+my_client[0].socket[1][0]+":"+str(my_client[0].socket[1][1])+"  users now: "+str(len(clients)))
 		else:
-			log.info("client denied: "+str(len(clients)-1)+"@"+my_client[0].socket[1][0]+":"+str(my_client[0].socket[1][1])+" blocked by ip")
+			LOGGER.info("client denied: "+str(len(clients)-1)+"@"+my_client[0].socket[1][0]+":"+str(my_client[0].socket[1][1])+" blocked by ip")
 			my_client.socket.close()
 
 rtl_tcp_resetting=False #put me away
@@ -212,7 +215,7 @@ class rtl_tcp_asyncore(asyncore.dispatcher):
 			self.connect((cfg.rtl_tcp_host, cfg.rtl_tcp_port))
 			self.socket.settimeout(0.1)
 		except Exception:
-			log.error("rtl_tcp connection refused. Retrying.")
+			LOGGER.error("rtl_tcp connection refused. Retrying.")
 			thread.start_new_thread(rtl_tcp_asyncore_reset, (1,))
 			self.close()
 			return
@@ -225,8 +228,7 @@ class rtl_tcp_asyncore(asyncore.dispatcher):
 		self.ok=False
 		server_is_missing=hasattr(exc_value,"errno") and exc_value.errno==111
 		if (not server_is_missing) or (not server_missing_logged):
-			log.error("with rtl_tcp host connection: "+str(exc_value))
-			#traceback.print_tb(exc_traceback)
+			LOGGER.exception(exc_value)
 			server_missing_logged|=server_is_missing
 		try:
 			self.close()
@@ -240,13 +242,13 @@ class rtl_tcp_asyncore(asyncore.dispatcher):
 		self.socket.settimeout(0.1)
 		rtl_tcp_connected=True
 		if self.ok:
-			log.info("rtl_tcp host connection estabilished")
+			LOGGER.info("rtl_tcp host connection estabilished")
 			server_missing_logged=False
 
 	def handle_close(self):
 		global rtl_tcp_connected
 		rtl_tcp_connected=False
-		log.error("rtl_tcp host connection has closed, now trying to reopen")
+		LOGGER.error("rtl_tcp host connection has closed, now trying to reopen")
 		try:
 			self.close()
 		except Exception:
@@ -285,53 +287,53 @@ def handle_command(command, client_param):
 	command_id=command[0]
 	client_info=str(client.ident)+"@"+client.socket[1][0]+":"+str(client.socket[1][1])
 	if(time.time()-client.start_time<cfg.client_cant_set_until and not (cfg.first_client_can_set and client.ident==0) ):
-		log.info("deny: "+client_info+" -> client can't set anything until "+str(cfg.client_cant_set_until)+" seconds")
+		LOGGER.info("deny: "+client_info+" -> client can't set anything until "+str(cfg.client_cant_set_until)+" seconds")
 		return 0
 	if command_id == 1:
 		if max(map((lambda r: param>=r[0] and param<=r[1]),cfg.freq_allowed_ranges)):
-			log.debug("allow: "+client_info+" -> set freq "+str(param))
+			LOGGER.debug("allow: "+client_info+" -> set freq "+str(param))
 			return 1
 		else:
-			log.debug("deny: "+client_info+" -> set freq - out of range: "+str(param))
+			LOGGER.debug("deny: "+client_info+" -> set freq - out of range: "+str(param))
 	elif command_id == 2:
-		log.debug("deny: "+client_info+" -> set sample rate: "+str(param))
+		LOGGER.debug("deny: "+client_info+" -> set sample rate: "+str(param))
 		sample_rate=param
 		return 0 # ordinary clients are not allowed to do this
 	elif command_id == 3:
-		log.debug("deny/allow: "+client_info+" -> set gain mode: "+str(param))
+		LOGGER.debug("deny/allow: "+client_info+" -> set gain mode: "+str(param))
 		return cfg.allow_gain_set
 	elif command_id == 4:
-		log.debug("deny/allow: "+client_info+" -> set gain: "+str(param))
+		LOGGER.debug("deny/allow: "+client_info+" -> set gain: "+str(param))
 		return cfg.allow_gain_set 
 	elif command_id == 5:
-		log.debug("deny: "+client_info+" -> set freq correction: "+str(param))
+		LOGGER.debug("deny: "+client_info+" -> set freq correction: "+str(param))
 		return 0 
 	elif command_id == 6:
-		log.debug("deny/allow: set if stage gain")
+		LOGGER.debug("deny/allow: set if stage gain")
 		return cfg.allow_gain_set
 	elif command_id == 7:
-		log.debug("deny: set test mode")
+		LOGGER.debug("deny: set test mode")
 		return 0
 	elif command_id == 8:
-		log.debug("deny/allow: set agc mode")
+		LOGGER.debug("deny/allow: set agc mode")
 		return cfg.allow_gain_set
 	elif command_id == 9:
-		log.debug("deny: set direct sampling")
+		LOGGER.debug("deny: set direct sampling")
 		return 0
 	elif command_id == 10:
-		log.debug("deny: set offset tuning")
+		LOGGER.debug("deny: set offset tuning")
 		return 0
 	elif command_id == 11:
-		log.debug("deny: set rtl xtal")
+		LOGGER.debug("deny: set rtl xtal")
 		return 0
 	elif command_id == 12:
-		log.debug("deny: set tuner xtal")
+		LOGGER.debug("deny: set tuner xtal")
 		return 0
 	elif command_id == 13:
-		log.debug("deny/allow: set tuner gain by index")
+		LOGGER.debug("deny/allow: set tuner gain by index")
 		return cfg.allow_gain_set
 	else:
-		log.debug("deny: "+client_info+" sent an ivalid command: "+str(param))
+		LOGGER.debug("deny: "+client_info+" sent an ivalid command: "+str(param))
 	return 0
 
 def watchdog_thread():
@@ -344,14 +346,14 @@ def watchdog_thread():
 	rtl_tcp_connected=False
 	null_fill=False
 	time.sleep(4) # wait before activating this thread
-	log.info("watchdog started")
+	LOGGER.info("watchdog started")
 	first_start=True
 	n=0
 	while True:
 		wait_altogether=cfg.watchdog_interval if rtl_tcp_connected or first_start else cfg.reconnect_interval	
 		first_start=False
 		if null_fill:
-			log.error("watchdog: filling buffer with zeros.")	
+			LOGGER.error("watchdog: filling buffer with zeros.")
 			while wait_altogether>0:
 				wait_altogether-=1.0/second_frac
                 for i in range((2 * sample_rate) // (second_frac * zero_buffer_size)):
@@ -366,7 +368,7 @@ def watchdog_thread():
 			time.sleep(wait_altogether)
 		null_fill=not watchdog_data_count
 		if not watchdog_data_count:
-			log.error("watchdog: restarting rtl_tcp_asyncore() now.")
+			LOGGER.error("watchdog: restarting rtl_tcp_asyncore() now.")
 			rtl_tcp_asyncore_reset(0)
 		watchdog_data_count=0
 			
@@ -376,7 +378,7 @@ def dsp_debug_thread():
 	global dsp_data_count
 	while 1:	
 		time.sleep(1)
-		print("DSP | Original data: "+str(int(original_data_count/1000))+"kB/sec | Processed data: "+str(int(dsp_data_count/1000))+"kB/sec")
+		LOGGER.debug("DSP | Original data: "+str(int(original_data_count/1000))+"kB/sec | Processed data: "+str(int(dsp_data_count/1000))+"kB/sec")
 		dsp_data_count = original_data_count=0
 		
 class client:
@@ -410,7 +412,6 @@ class client:
 def main():
 	global server_missing_logged
 	global rtl_dongle_identifier
-	global log
 	global clients
 	global clients_mutex
 	global original_data_count
@@ -423,18 +424,17 @@ def main():
 	global sample_rate
 
 	# set up logging
-	log = logging.getLogger("rtl_mus")
-	log.setLevel(logging.DEBUG)
+	LOGGER.setLevel(logging.DEBUG)
 	formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 	stream_handler = logging.StreamHandler()
 	stream_handler.setLevel(logging.DEBUG)
 	stream_handler.setFormatter(formatter)
-	log.addHandler(stream_handler)
+	LOGGER.addHandler(stream_handler)
 	file_handler = logging.FileHandler(cfg.log_file_path)
 	file_handler.setLevel(logging.INFO)
 	file_handler.setFormatter(formatter)
-	log.addHandler(file_handler)
-	log.info("Server is UP")
+	LOGGER.addHandler(file_handler)
+	LOGGER.info("Server is UP")
 	
 	server_missing_logged=0	# Not to flood the screen with messages related to rtl_tcp disconnect
 	rtl_dongle_identifier=b'' # rtl_tcp sends some identifier on dongle type and gain values in the first few bytes right after connection
@@ -448,7 +448,7 @@ def main():
 
 	# start dsp threads
 	if cfg.use_dsp_command:
-		print("Opening DSP process...")
+		LOGGER.info("Opening DSP process...")
 		proc = subprocess.Popen (cfg.dsp_command.split(" "), stdin = subprocess.PIPE, stdout = subprocess.PIPE) #!! should fix the split :-S
 		dsp_read_thread_v=thread.start_new_thread(dsp_read_thread, ())
 		dsp_write_thread_v=thread.start_new_thread(dsp_write_thread, ())
