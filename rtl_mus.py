@@ -49,31 +49,19 @@ import traceback
 LOGGER = logging.getLogger("rtl_mus")
 
 
-def ip_match(this, ip_ranges, for_allow):
-    if not len(ip_ranges):
-        return 1  # empty list matches all ip addresses
-    for ip_range in ip_ranges:
-        # print(this[0:len(ip_range)], ip_range)
-        if this[0:len(ip_range)] == ip_range:
-            return 1
-    return 0
+def ip_match(this, ip_ranges):
+    return not ip_ranges or any(this.startswith(ip_range) for ip_range in ip_ranges)
 
 
 def ip_access_control(ip):
     if not cfg.use_ip_access_control:
-        return 1
-    allowed = 0
+        return True
+    allowed = ip_match(ip, cfg.allowed_ip_ranges)
+    denied = ip_match(ip, cfg.denied_ip_ranges)
     if cfg.order_allow_deny:
-        if ip_match(ip, cfg.allowed_ip_ranges, 1):
-            allowed = 1
-        if ip_match(ip, cfg.denied_ip_ranges, 0):
-            allowed = 0
+        return False if denied else allowed
     else:
-        if ip_match(ip, cfg.denied_ip_ranges, 0):
-            allowed = 0
-        if ip_match(ip, cfg.allowed_ip_ranges, 1):
-            allowed = 1
-    return allowed
+        return True if allowed else not denied
 
 
 def add_data_to_clients(new_data):
@@ -197,7 +185,7 @@ class ServerAsyncore(asyncore.dispatcher):
             LOGGER.info("client accepted: " + str(len(clients) - 1) + "@" + client.socket[1][0] + ":" + str(client.socket[1][1]) + "  users now: " + str(len(clients)))
         else:
             LOGGER.info("client denied: " + str(len(clients) - 1) + "@" + client.socket[1][0] + ":" + str(client.socket[1][1]) + " blocked by ip")
-            client.socket.close()
+            client.socket[0].close()
 
 
 rtl_tcp_resetting = False  # put me away
