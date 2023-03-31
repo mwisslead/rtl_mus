@@ -24,7 +24,8 @@ along with RTL Multi-User Server.  If not, see <http://www.gnu.org/licenses/>.
 
 '''
 
-import socket 
+from __future__ import print_function, unicode_literals
+import socket
 import sys
 import array
 import time
@@ -32,20 +33,20 @@ import logging
 import os
 import time
 import subprocess
-import fcntl
-import thread
-import pdb
+try:
+	import thread
+except ImportError:
+	import _thread as thread
 import asyncore
 import multiprocessing
 
-import code
 import traceback
 
 def ip_match(this,ip_ranges,for_allow):
 	if not len(ip_ranges):
 		return 1 #empty list matches all ip addresses
 	for ip_range in ip_ranges:
-		#print this[0:len(ip_range)], ip_range
+		#print(this[0:len(ip_range)], ip_range)
 		if this[0:len(ip_range)]==ip_range:
 			return 1
 	return 0
@@ -67,11 +68,9 @@ def add_data_to_clients(new_data):
 	# might be called from:
 	# -> dsp_read
 	# -> rtl_tcp_asyncore.handle_read
-	global clients
-	global clients_mutex
 	clients_mutex.acquire()
 	for client in clients:
-		#print "client %d size: %d"%(client[0].ident,client[0].waiting_data.qsize())
+		#print("client %d size: %d"%(client[0].ident,client[0].waiting_data.qsize()))
 		if client[0].waiting_data:
 			if(client[0].waiting_data.full()):
 				if cfg.cache_full_behaviour == 0:
@@ -90,7 +89,6 @@ def add_data_to_clients(new_data):
 	clients_mutex.release()
 
 def dsp_read_thread():
-	global proc
 	global dsp_data_count
 	while True:
 		try:
@@ -104,13 +102,11 @@ def dsp_read_thread():
 			dsp_data_count+=len(my_buffer)	
 
 def dsp_write_thread():
-	global proc
-	global dsp_input_queue
 	global original_data_count
 	while True:
 		try:
 			my_buffer=dsp_input_queue.get(timeout=0.3)
-		except:
+		except Exception:
 			continue
 		proc.stdin.write(my_buffer)
 		proc.stdin.flush()
@@ -123,14 +119,13 @@ class client_handler(asyncore.dispatcher):
 		self.client=client_param
 		self.client[0].asyncore=self
 		self.sent_dongle_id=False
-		self.last_waiting_buffer=""
+		self.last_waiting_buffer=b""
 		asyncore.dispatcher.__init__(self, self.client[0].socket[0])
 
 	def handle_read(self):
-		global commands
 		new_command = self.recv(5)
 		if len(new_command)>=5:
-			if handle_command(new_command, self.client):
+			if handle_command(bytearray(new_command), self.client):
 				commands.put(new_command)
 
 	def handle_error(self):
@@ -144,18 +139,15 @@ class client_handler(asyncore.dispatcher):
 		log.info("client disconnected: "+str(self.client[0].ident)+"@"+self.client[0].socket[1][0])
 
 	def writable(self):
-		#print "queryWritable",not self.client[0].waiting_data.empty()
+		#print("queryWritable",not self.client[0].waiting_data.empty())
 		return not self.client[0].waiting_data.empty()
 
 	def handle_write(self):
-		global last_waiting
-		global rtl_dongle_identifier
-		global sample_rate
 		if not self.sent_dongle_id:
 			self.send(rtl_dongle_identifier)
 			self.sent_dongle_id=True
 			return
-		#print "write2client",self.client[0].waiting_data.qsize()
+		#print("write2client",self.client[0].waiting_data.qsize())
 		next=self.last_waiting_buffer+self.client[0].waiting_data.get()
 		sent=asyncore.dispatcher.send(self, next)
 		self.last_waiting_buffer=next[sent:]
@@ -172,8 +164,6 @@ class server_asyncore(asyncore.dispatcher):
 
 	def handle_accept(self):
 		global max_client_id
-		global clients_mutex
-		global clients
 		my_client=[client()]
 		my_client[0].socket=self.accept()
 		if (my_client[0].socket is None): # not sure if required
@@ -198,31 +188,30 @@ def rtl_tcp_asyncore_reset(timeout):
 	global rtl_tcp_core
 	global rtl_tcp_resetting
 	if rtl_tcp_resetting: return
-	#print "rtl_tcp_asyncore_reset"
+	#print("rtl_tcp_asyncore_reset")
 	rtl_tcp_resetting=True
 	time.sleep(timeout)
 	try:
 		rtl_tcp_core.close()
-	except:
+	except Exception:
 		pass
 	try:
 		del rtl_tcp_core
-	except:
+	except Exception:
 		pass
 	rtl_tcp_core=rtl_tcp_asyncore()
-	#print asyncore.socket_map
+	#print(asyncore.socket_map)
 	rtl_tcp_resetting=False
 
 class rtl_tcp_asyncore(asyncore.dispatcher):
 	def __init__(self):
-		global server_missing_logged
 		asyncore.dispatcher.__init__(self)
 		self.ok=True
 		self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
 		try:		
 			self.connect((cfg.rtl_tcp_host, cfg.rtl_tcp_port))
 			self.socket.settimeout(0.1)
-		except:
+		except Exception:
 			log.error("rtl_tcp connection refused. Retrying.")
 			thread.start_new_thread(rtl_tcp_asyncore_reset, (1,))
 			self.close()
@@ -241,7 +230,7 @@ class rtl_tcp_asyncore(asyncore.dispatcher):
 			server_missing_logged|=server_is_missing
 		try:
 			self.close()
-		except:
+		except Exception:
 			pass
 		thread.start_new_thread(rtl_tcp_asyncore_reset, (2,))
 
@@ -256,18 +245,16 @@ class rtl_tcp_asyncore(asyncore.dispatcher):
 
 	def handle_close(self):
 		global rtl_tcp_connected
-		global rtl_tcp_core
 		rtl_tcp_connected=False
 		log.error("rtl_tcp host connection has closed, now trying to reopen")
 		try:
 			self.close()
-		except:
+		except Exception:
 			pass
 		thread.start_new_thread(rtl_tcp_asyncore_reset, (2,))
 
 	def handle_read(self):
 		global rtl_dongle_identifier
-		global dsp_input_queue
 		global watchdog_data_count
 		if(len(rtl_dongle_identifier)==0):
 			rtl_dongle_identifier=self.recv(12)
@@ -277,34 +264,25 @@ class rtl_tcp_asyncore(asyncore.dispatcher):
 			watchdog_data_count+=16348
 		if cfg.use_dsp_command:
 			dsp_input_queue.put(new_data_buffer)
-			#print "did put anyway"
+			#print("did put anyway")
 		else:
 			add_data_to_clients(new_data_buffer)
 
 	def writable(self):
 		#check if any new commands to write
-		global commands
 		return not commands.empty()
 
 	def handle_write(self):
-		global commands
 		while not commands.empty():
 			mcmd=commands.get()
 			self.send(mcmd)
-
-def xxd(data):
-	#diagnostic purposes only
-	output=""
-	for d in data:
-		output+=hex(ord(d))[2:].zfill(2)+" " 
-	return output
 
 def handle_command(command, client_param):
 	global sample_rate
 	client=client_param[0]
 	param=array.array("I", command[1:5])[0]
 	param=socket.ntohl(param)
-	command_id=ord(command[0])
+	command_id=command[0]
 	client_info=str(client.ident)+"@"+client.socket[1][0]+":"+str(client.socket[1][1])
 	if(time.time()-client.start_time<cfg.client_cant_set_until and not (cfg.first_client_can_set and client.ident==0) ):
 		log.info("deny: "+client_info+" -> client can't set anything until "+str(cfg.client_cant_set_until)+" seconds")
@@ -358,12 +336,10 @@ def handle_command(command, client_param):
 
 def watchdog_thread():
 	global rtl_tcp_connected
-	global rtl_tcp_core	
 	global watchdog_data_count
-	global sample_rate
 	zero_buffer_size=16348
 	second_frac=10
-	zero_buffer='\x7f'*zero_buffer_size
+    zero_buffer = b'\x7f' * zero_buffer_size
 	watchdog_data_count=0
 	rtl_tcp_connected=False
 	null_fill=False
@@ -378,14 +354,14 @@ def watchdog_thread():
 			log.error("watchdog: filling buffer with zeros.")	
 			while wait_altogether>0:
 				wait_altogether-=1.0/second_frac
-				for i in range(0,((2*sample_rate)/second_frac)/zero_buffer_size):	
+                for i in range((2 * sample_rate) // (second_frac * zero_buffer_size)):
 					add_data_to_clients(zero_buffer)
 					n+=len(zero_buffer)
 					time.sleep(0) #yield
 					if watchdog_data_count: break
 				if watchdog_data_count: break
 				time.sleep(1.0/second_frac)
-				#print "sent altogether",n
+				#print("sent altogether",n)
 		else:
 			time.sleep(wait_altogether)
 		null_fill=not watchdog_data_count
@@ -398,10 +374,9 @@ def watchdog_thread():
 
 def dsp_debug_thread():
 	global dsp_data_count
-	global original_data_count
 	while 1:	
 		time.sleep(1)
-		print "DSP | Original data: "+str(int(original_data_count/1000))+"kB/sec | Processed data: "+str(int(dsp_data_count/1000))+"kB/sec"
+		print("DSP | Original data: "+str(int(original_data_count/1000))+"kB/sec | Processed data: "+str(int(dsp_data_count/1000))+"kB/sec")
 		dsp_data_count = original_data_count=0
 		
 class client:
@@ -413,19 +388,17 @@ class client:
 	asyncore=None
 
 	def close(self):
-		global clients_mutex
-		global clients
 		clients_mutex.acquire()
 		for i in range(0,len(clients)):
 			if clients[i][0].ident==self.ident:
 				try:
 					self.socket[0].close()
-				except:
+				except Exception:
 					pass
 				try:
 					self.asyncore.close()
 					del self.asyncore
-				except:
+				except Exception:
 					pass
 				if self.waiting_data:
 					self.waiting_data.close()
@@ -464,7 +437,7 @@ def main():
 	log.info("Server is UP")
 	
 	server_missing_logged=0	# Not to flood the screen with messages related to rtl_tcp disconnect
-	rtl_dongle_identifier='' # rtl_tcp sends some identifier on dongle type and gain values in the first few bytes right after connection
+	rtl_dongle_identifier=b'' # rtl_tcp sends some identifier on dongle type and gain values in the first few bytes right after connection
 	clients=[]
 	dsp_data_count=original_data_count=0
 	commands=multiprocessing.Queue()
@@ -475,7 +448,7 @@ def main():
 
 	# start dsp threads
 	if cfg.use_dsp_command:
-		print "Opening DSP process..."
+		print("Opening DSP process...")
 		proc = subprocess.Popen (cfg.dsp_command.split(" "), stdin = subprocess.PIPE, stdout = subprocess.PIPE) #!! should fix the split :-S
 		dsp_read_thread_v=thread.start_new_thread(dsp_read_thread, ())
 		dsp_write_thread_v=thread.start_new_thread(dsp_write_thread, ())
@@ -494,13 +467,13 @@ def main():
 
 
 if __name__=="__main__":
-	print "RTL Multi-User Server v0.21a, made at HA5KFU Amateur Radio Club (http://ha5kfu.hu)"
-	print "    code by Andras Retzler, HA7ILM"
-	print "    distributed under GNU GPL v3"
-	print 
+	print("RTL Multi-User Server v0.21a, made at HA5KFU Amateur Radio Club (http://ha5kfu.hu)")
+	print("	code by Andras Retzler, HA7ILM")
+	print("	distributed under GNU GPL v3")
+	print()
 	# === Load configuration script ===
 	if len(sys.argv)==1:
-		print "Warning! Configuration script not specified. I will use: \"config_rtl.py\""
+		print("Warning! Configuration script not specified. I will use: \"config_rtl.py\"")
 		config_script="config_rtl"
 	else:
 		config_script=sys.argv[1]
