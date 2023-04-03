@@ -150,7 +150,7 @@ class Client(asyncore.dispatcher):
             LOGGER.info("deny: %s -> client can't set anything until %d seconds", self, CONFIG.client_cant_set_until)
             return 0
         if command_id == 1:
-            if max(map((lambda r: param >= r[0] and param <= r[1]), CONFIG.freq_allowed_ranges)):
+            if any(a <= param <= b for a, b in CONFIG.freq_allowed_ranges):
                 LOGGER.debug("allow: %s -> set freq %s", self, param)
                 return 1
             else:
@@ -163,7 +163,7 @@ class Client(asyncore.dispatcher):
             LOGGER.debug("deny: %s -> set sample rate: %s", self, param)
             return 0  # ordinary clients are not allowed to do this
         elif command_id == 3:
-            LOGGER.debug("deny/allow: %s -> set gain mode: %s", self, param)
+            LOGGER.debug("%s: %s -> set gain mode: %s", 'allow' if CONFIG.allow_gain_set else 'deny', self, param)
             return CONFIG.allow_gain_set
         elif command_id == 4:
             LOGGER.debug("deny/allow: %s -> set gain: %s", self, param)
