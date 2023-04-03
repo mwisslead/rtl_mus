@@ -45,6 +45,20 @@ import traceback
 LOGGER = logging.getLogger("rtl_mus")
 
 
+def setup_logging():
+    LOGGER.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.DEBUG)
+    stream_handler.setFormatter(formatter)
+    LOGGER.addHandler(stream_handler)
+    if CONFIG.log_file_path:
+        file_handler = logging.FileHandler(CONFIG.log_file_path)
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(formatter)
+        LOGGER.addHandler(file_handler)
+
+
 def ip_match(this, ip_ranges):
     return not ip_ranges or any(this.startswith(ip_range) for ip_range in ip_ranges)
 
@@ -62,6 +76,7 @@ def ip_access_control(ip):
 
 def dsp_read_thread():
     global dsp_data_count
+    dsp_data_count = 0
     while True:
         try:
             my_buffer = proc.stdout.read(1024)
@@ -76,6 +91,7 @@ def dsp_read_thread():
 
 def dsp_write_thread():
     global original_data_count
+    original_data_count = 0
     while True:
         try:
             my_buffer = dsp_input_queue.get(timeout=0.3)
@@ -85,6 +101,24 @@ def dsp_write_thread():
         proc.stdin.flush()
         if CONFIG.debug_dsp_command:
             original_data_count += len(my_buffer)
+
+
+def dsp_debug_thread():
+    global dsp_data_count
+    while True:
+        time.sleep(1)
+        LOGGER.debug("DSP | Original data: %dkB/sec | Processed data: %dkB/sec", original_data_count / 1000, dsp_data_count / 1000)
+        dsp_data_count = original_data_count = 0
+
+
+def start_dsp():
+    global proc
+    LOGGER.info("Opening DSP process...")
+    proc = subprocess.Popen(CONFIG.dsp_command.split(" "), stdin=subprocess.PIPE, stdout=subprocess.PIPE)  # !! should fix the split :-S
+    dsp_read_thread_v = thread.start_new_thread(dsp_read_thread, ())
+    dsp_write_thread_v = thread.start_new_thread(dsp_write_thread, ())
+    if CONFIG.debug_dsp_command:
+        dsp_debug_thread_v = thread.start_new_thread(dsp_debug_thread, ())
 
 
 class Client(asyncore.dispatcher):
@@ -393,53 +427,26 @@ def watchdog_thread():
         watchdog_data_count = 0
 
 
-def dsp_debug_thread():
-    global dsp_data_count
-    while True:
-        time.sleep(1)
-        LOGGER.debug("DSP | Original data: %dkB/sec | Processed data: %dkB/sec", original_data_count / 1000, dsp_data_count / 1000)
-        dsp_data_count = original_data_count = 0
-
-
 def main():
     global server_missing_logged
     global rtl_dongle_identifier
-    global original_data_count
     global dsp_input_queue
-    global dsp_data_count
-    global proc
     global commands
     global RTL_TCP, SERVER
     global sample_rate
 
-    # set up logging
-    LOGGER.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.DEBUG)
-    stream_handler.setFormatter(formatter)
-    LOGGER.addHandler(stream_handler)
-    file_handler = logging.FileHandler(CONFIG.log_file_path)
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
-    LOGGER.addHandler(file_handler)
+    setup_logging()
     LOGGER.info("Server is UP")
 
     server_missing_logged = 0  # Not to flood the screen with messages related to rtl_tcp disconnect
     rtl_dongle_identifier = b''  # rtl_tcp sends some identifier on dongle type and gain values in the first few bytes right after connection
-    dsp_data_count = original_data_count = 0
     commands = multiprocessing.Queue()
     dsp_input_queue = multiprocessing.Queue()
     sample_rate = 250000  # so far only watchdog thread uses it to fill buffer up with zeros on missing input
 
     # start dsp threads
     if CONFIG.use_dsp_command:
-        LOGGER.info("Opening DSP process...")
-        proc = subprocess.Popen(CONFIG.dsp_command.split(" "), stdin=subprocess.PIPE, stdout=subprocess.PIPE)  # !! should fix the split :-S
-        dsp_read_thread_v = thread.start_new_thread(dsp_read_thread, ())
-        dsp_write_thread_v = thread.start_new_thread(dsp_write_thread, ())
-        if CONFIG.debug_dsp_command:
-            dsp_debug_thread_v = thread.start_new_thread(dsp_debug_thread, ())
+        start_dsp()
 
     # start watchdog thread
     if CONFIG.watchdog_interval != 0:
