@@ -74,12 +74,12 @@ def ip_access_control(ip):
         return True if allowed else not denied
 
 
-def dsp_read_thread():
+def dsp_read_thread(fid):
     global dsp_data_count
     dsp_data_count = 0
     while True:
         try:
-            my_buffer = proc.stdout.read(1024)
+            my_buffer = fid.read(1024)
         except IOError:
             LOGGER.error("DSP subprocess is not ready for reading.")
             time.sleep(1)
@@ -89,7 +89,7 @@ def dsp_read_thread():
             dsp_data_count += len(my_buffer)
 
 
-def dsp_write_thread():
+def dsp_write_thread(fid):
     global original_data_count
     original_data_count = 0
     while True:
@@ -97,8 +97,11 @@ def dsp_write_thread():
             my_buffer = dsp_input_queue.get(timeout=0.3)
         except Exception:
             continue
-        proc.stdin.write(my_buffer)
-        proc.stdin.flush()
+        try:
+            fid.write(my_buffer)
+        except IOError:
+            break
+        fid.flush()
         if CONFIG.debug_dsp_command:
             original_data_count += len(my_buffer)
 
@@ -112,11 +115,10 @@ def dsp_debug_thread():
 
 
 def start_dsp():
-    global proc
     LOGGER.info("Opening DSP process...")
     proc = subprocess.Popen(CONFIG.dsp_command.split(" "), stdin=subprocess.PIPE, stdout=subprocess.PIPE)  # !! should fix the split :-S
-    dsp_read_thread_v = thread.start_new_thread(dsp_read_thread, ())
-    dsp_write_thread_v = thread.start_new_thread(dsp_write_thread, ())
+    dsp_read_thread_v = thread.start_new_thread(dsp_read_thread, (proc.stdout,))
+    dsp_write_thread_v = thread.start_new_thread(dsp_write_thread, (proc.stdin,))
     if CONFIG.debug_dsp_command:
         dsp_debug_thread_v = thread.start_new_thread(dsp_debug_thread, ())
 
