@@ -27,7 +27,7 @@ along with RTL Multi-User Server.  If not, see <http://www.gnu.org/licenses/>.
 from __future__ import print_function, unicode_literals
 import socket
 import sys
-import array
+import struct
 import time
 import logging
 import os
@@ -143,7 +143,7 @@ class Client(asyncore.dispatcher):
 
     def command_allowed(self, command):
         global sample_rate
-        param = array.array("I", command[1:5])[0]
+        param = struct.unpack("I", command[1:5])[0]
         param = socket.ntohl(param)
         command_id = command[0]
         if time.time() - self.start_time < CONFIG.client_cant_set_until and not (CONFIG.first_client_can_set and self.ident == 0):
@@ -156,8 +156,11 @@ class Client(asyncore.dispatcher):
             else:
                 LOGGER.debug("deny: %s -> set freq - out of range: %s", self, param)
         elif command_id == 2:
+            if CONFIG.allow_sample_rate_set:
+                LOGGER.debug("allow: %s -> set sample rate: %s", self, param)
+                sample_rate = param
+                return True
             LOGGER.debug("deny: %s -> set sample rate: %s", self, param)
-            sample_rate = param
             return 0  # ordinary clients are not allowed to do this
         elif command_id == 3:
             LOGGER.debug("deny/allow: %s -> set gain mode: %s", self, param)
@@ -354,6 +357,7 @@ class RtlTcpAsyncore(asyncore.dispatcher):
         if self.ok:
             LOGGER.info("rtl_tcp host connection estabilished")
             server_missing_logged = False
+            commands.put(b'\x02' + struct.pack('>I', sample_rate)) #send the initial sample_rate
 
     def handle_close(self):
         global rtl_tcp_connected
@@ -444,7 +448,7 @@ def main():
     rtl_dongle_identifier = b''  # rtl_tcp sends some identifier on dongle type and gain values in the first few bytes right after connection
     commands = multiprocessing.Queue()
     dsp_input_queue = multiprocessing.Queue()
-    sample_rate = 250000  # so far only watchdog thread uses it to fill buffer up with zeros on missing input
+    sample_rate = CONFIG.initial_sample_rate
 
     # start dsp threads
     if CONFIG.use_dsp_command:

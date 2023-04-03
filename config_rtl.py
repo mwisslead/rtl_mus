@@ -31,6 +31,7 @@ ignore_clients_without_commands = 1 # we won't serve data to telnet sessions and
 												# we'll start to serve data after getting the first valid command 
 freq_allowed_ranges = [[0000000,2200000000]]
 # Allow from all: freq_allowed_ranges = [[24000000,2200000000]]
+initial_sample_rate = 250000
 
 client_cant_set_until=0		
 first_client_can_set=True	#openwebrx - spectrum thread will set things on start # no good, clients set parameters and things
@@ -56,6 +57,7 @@ use_ip_access_control=0
 order_allow_deny=0
 denied_ip_ranges=() 
 allowed_ip_ranges=()
+allow_sample_rate_set = False
 allow_gain_set=1
 
 use_dsp_command=False # you can process raw I/Q data with a custom command that starts a process that we can pipe the data into, and also pipe out of.
