@@ -50,11 +50,11 @@ def ip_match(this, ip_ranges):
 
 
 def ip_access_control(ip):
-    if not cfg.use_ip_access_control:
+    if not CONFIG.use_ip_access_control:
         return True
-    allowed = ip_match(ip, cfg.allowed_ip_ranges)
-    denied = ip_match(ip, cfg.denied_ip_ranges)
-    if cfg.order_allow_deny:
+    allowed = ip_match(ip, CONFIG.allowed_ip_ranges)
+    denied = ip_match(ip, CONFIG.denied_ip_ranges)
+    if CONFIG.order_allow_deny:
         return False if denied else allowed
     else:
         return True if allowed else not denied
@@ -70,7 +70,7 @@ def dsp_read_thread():
             time.sleep(1)
             continue
         SERVER.add_data_to_clients(my_buffer)
-        if cfg.debug_dsp_command:
+        if CONFIG.debug_dsp_command:
             dsp_data_count += len(my_buffer)
 
 
@@ -83,7 +83,7 @@ def dsp_write_thread():
             continue
         proc.stdin.write(my_buffer)
         proc.stdin.flush()
-        if cfg.debug_dsp_command:
+        if CONFIG.debug_dsp_command:
             original_data_count += len(my_buffer)
 
 
@@ -110,11 +110,11 @@ class Client(asyncore.dispatcher):
         param = array.array("I", command[1:5])[0]
         param = socket.ntohl(param)
         command_id = command[0]
-        if time.time() - self.start_time < cfg.client_cant_set_until and not (cfg.first_client_can_set and self.ident == 0):
-            LOGGER.info("deny: %s -> client can't set anything until %d seconds", self, cfg.client_cant_set_until)
+        if time.time() - self.start_time < CONFIG.client_cant_set_until and not (CONFIG.first_client_can_set and self.ident == 0):
+            LOGGER.info("deny: %s -> client can't set anything until %d seconds", self, CONFIG.client_cant_set_until)
             return 0
         if command_id == 1:
-            if max(map((lambda r: param >= r[0] and param <= r[1]), cfg.freq_allowed_ranges)):
+            if max(map((lambda r: param >= r[0] and param <= r[1]), CONFIG.freq_allowed_ranges)):
                 LOGGER.debug("allow: %s -> set freq %s", self, param)
                 return 1
             else:
@@ -125,22 +125,22 @@ class Client(asyncore.dispatcher):
             return 0  # ordinary clients are not allowed to do this
         elif command_id == 3:
             LOGGER.debug("deny/allow: %s -> set gain mode: %s", self, param)
-            return cfg.allow_gain_set
+            return CONFIG.allow_gain_set
         elif command_id == 4:
             LOGGER.debug("deny/allow: %s -> set gain: %s", self, param)
-            return cfg.allow_gain_set
+            return CONFIG.allow_gain_set
         elif command_id == 5:
             LOGGER.debug("deny: %s -> set freq correction: %s", self, param)
             return 0
         elif command_id == 6:
             LOGGER.debug("deny/allow: %s -> set if stage gain", self)
-            return cfg.allow_gain_set
+            return CONFIG.allow_gain_set
         elif command_id == 7:
             LOGGER.debug("deny: %s -> set test mode", self)
             return 0
         elif command_id == 8:
             LOGGER.debug("deny/allow: %s -> set agc mode", self)
-            return cfg.allow_gain_set
+            return CONFIG.allow_gain_set
         elif command_id == 9:
             LOGGER.debug("deny: %s -> set direct sampling", self)
             return 0
@@ -155,7 +155,7 @@ class Client(asyncore.dispatcher):
             return 0
         elif command_id == 13:
             LOGGER.debug("deny/allow: %s -> set tuner gain by index", self)
-            return cfg.allow_gain_set
+            return CONFIG.allow_gain_set
         else:
             LOGGER.debug("deny: %s sent an ivalid command: %s", self, param)
         return 0
@@ -192,18 +192,18 @@ class Client(asyncore.dispatcher):
         # print("self %d size: %d"%(self.ident,self.waiting_data.qsize()))
         if self.waiting_data:
             if self.waiting_data.full():
-                if cfg.cache_full_behaviour == 0:
+                if CONFIG.cache_full_behaviour == 0:
                     LOGGER.error("client cache full, dropping samples: %s", self)
                     while not self.waiting_data.empty():  # clear queue
                         self.waiting_data.get(False, None)
-                elif cfg.cache_full_behaviour == 1:
+                elif CONFIG.cache_full_behaviour == 1:
                     # rather closing client:
                     LOGGER.error("client cache full, dropping client: %s", self)
                     self.close()
-                elif cfg.cache_full_behaviour == 2:
+                elif CONFIG.cache_full_behaviour == 2:
                     pass  # client cache full, just not taking care
                 else:
-                    LOGGER.error("invalid value for cfg.cache_full_behaviour")
+                    LOGGER.error("invalid value for CONFIG.cache_full_behaviour")
             else:
                 self.waiting_data.put(data)
 
@@ -220,9 +220,9 @@ class ServerAsyncore(asyncore.dispatcher):
         asyncore.dispatcher.__init__(self)
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.set_reuse_addr()
-        self.bind((cfg.my_ip, cfg.my_listening_port))
+        self.bind((CONFIG.my_ip, CONFIG.my_listening_port))
         self.listen(5)
-        LOGGER.info("Server listening on port: %s", cfg.my_listening_port)
+        LOGGER.info("Server listening on port: %s", CONFIG.my_listening_port)
 
     def handle_accept(self):
         accept = self.accept()
@@ -260,7 +260,7 @@ rtl_tcp_resetting = False  # put me away
 
 
 def rtl_tcp_asyncore_reset(timeout):
-    global rtl_tcp_core
+    global RTL_TCP
     global rtl_tcp_resetting
     if rtl_tcp_resetting:
         return
@@ -268,14 +268,14 @@ def rtl_tcp_asyncore_reset(timeout):
     rtl_tcp_resetting = True
     time.sleep(timeout)
     try:
-        rtl_tcp_core.close()
+        RTL_TCP.close()
     except Exception:
         pass
     try:
-        del rtl_tcp_core
+        del RTL_TCP
     except Exception:
         pass
-    rtl_tcp_core = RtlTcpAsyncore()
+    RTL_TCP = RtlTcpAsyncore()
     # print(asyncore.socket_map)
     rtl_tcp_resetting = False
 
@@ -286,7 +286,7 @@ class RtlTcpAsyncore(asyncore.dispatcher):
         self.ok = True
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            self.connect((cfg.rtl_tcp_host, cfg.rtl_tcp_port))
+            self.connect((CONFIG.rtl_tcp_host, CONFIG.rtl_tcp_port))
             self.socket.settimeout(0.1)
         except Exception:
             LOGGER.error("rtl_tcp connection refused. Retrying.")
@@ -336,9 +336,9 @@ class RtlTcpAsyncore(asyncore.dispatcher):
             rtl_dongle_identifier = self.recv(12)
             return
         new_data_buffer = self.recv(16348)
-        if cfg.watchdog_interval:
+        if CONFIG.watchdog_interval:
             watchdog_data_count += 16348
-        if cfg.use_dsp_command:
+        if CONFIG.use_dsp_command:
             dsp_input_queue.put(new_data_buffer)
             # print("did put anyway")
         else:
@@ -368,7 +368,7 @@ def watchdog_thread():
     first_start = True
     n = 0
     while True:
-        wait_altogether = cfg.watchdog_interval if rtl_tcp_connected or first_start else cfg.reconnect_interval
+        wait_altogether = CONFIG.watchdog_interval if rtl_tcp_connected or first_start else CONFIG.reconnect_interval
         first_start = False
         if null_fill:
             LOGGER.error("watchdog: filling buffer with zeros.")
@@ -409,7 +409,7 @@ def main():
     global dsp_data_count
     global proc
     global commands
-    global rtl_tcp_core, SERVER
+    global RTL_TCP, SERVER
     global sample_rate
 
     # set up logging
@@ -419,7 +419,7 @@ def main():
     stream_handler.setLevel(logging.DEBUG)
     stream_handler.setFormatter(formatter)
     LOGGER.addHandler(stream_handler)
-    file_handler = logging.FileHandler(cfg.log_file_path)
+    file_handler = logging.FileHandler(CONFIG.log_file_path)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     LOGGER.addHandler(file_handler)
@@ -433,20 +433,20 @@ def main():
     sample_rate = 250000  # so far only watchdog thread uses it to fill buffer up with zeros on missing input
 
     # start dsp threads
-    if cfg.use_dsp_command:
+    if CONFIG.use_dsp_command:
         LOGGER.info("Opening DSP process...")
-        proc = subprocess.Popen(cfg.dsp_command.split(" "), stdin=subprocess.PIPE, stdout=subprocess.PIPE)  # !! should fix the split :-S
+        proc = subprocess.Popen(CONFIG.dsp_command.split(" "), stdin=subprocess.PIPE, stdout=subprocess.PIPE)  # !! should fix the split :-S
         dsp_read_thread_v = thread.start_new_thread(dsp_read_thread, ())
         dsp_write_thread_v = thread.start_new_thread(dsp_write_thread, ())
-        if cfg.debug_dsp_command:
+        if CONFIG.debug_dsp_command:
             dsp_debug_thread_v = thread.start_new_thread(dsp_debug_thread, ())
 
     # start watchdog thread
-    if cfg.watchdog_interval != 0:
+    if CONFIG.watchdog_interval != 0:
         watchdog_thread_v = thread.start_new_thread(watchdog_thread, ())
 
     # start asyncores
-    rtl_tcp_core = RtlTcpAsyncore()
+    RTL_TCP = RtlTcpAsyncore()
     SERVER = ServerAsyncore()
 
     asyncore.loop(0.1)
@@ -463,7 +463,7 @@ if __name__ == "__main__":
         config_script = "config_rtl"
     else:
         config_script = sys.argv[1]
-    cfg = __import__(config_script)
-    if cfg.setuid_on_start:
-        os.setuid(cfg.uid)
+    CONFIG = __import__(config_script)
+    if CONFIG.setuid_on_start:
+        os.setuid(CONFIG.uid)
     main()
