@@ -213,14 +213,14 @@ class Client(asyncore.dispatcher):
 
 class ServerAsyncore(asyncore.dispatcher):
 
-    def __init__(self):
+    def __init__(self, addr, port):
         self.clients = set()
         self.clients_mutex = multiprocessing.Lock()
         self.client_count = 0
         asyncore.dispatcher.__init__(self)
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.set_reuse_addr()
-        self.bind((CONFIG.my_ip, CONFIG.my_listening_port))
+        self.bind((addr, port))
         self.listen(5)
         LOGGER.info("Server listening on port: %s", CONFIG.my_listening_port)
 
@@ -447,7 +447,7 @@ def main():
 
     # start asyncores
     RTL_TCP = RtlTcpAsyncore()
-    SERVER = ServerAsyncore()
+    SERVER = ServerAsyncore(CONFIG.my_ip, CONFIG.my_listening_port)
 
     asyncore.loop(0.1)
 
