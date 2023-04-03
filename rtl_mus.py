@@ -111,7 +111,7 @@ def dsp_read_thread(fid):
             dsp_data_count += len(my_buffer)
 
 
-def dsp_write_thread(fid):
+def dsp_write_thread(fid, dsp_input_queue):
     global original_data_count
     original_data_count = 0
     while True:
@@ -136,11 +136,11 @@ def dsp_debug_thread():
         LOGGER.debug("DSP | Original data: %dkB/sec | Processed data: %dkB/sec", original_data_count / 1000, dsp_data_count / 1000)
 
 
-def start_dsp():
+def start_dsp(dsp_input_queue):
     LOGGER.info("Opening DSP process...")
     proc = subprocess.Popen(CONFIG.dsp_command.split(" "), stdin=subprocess.PIPE, stdout=subprocess.PIPE)  # !! should fix the split :-S
     dsp_read_thread_v = thread.start_new_thread(dsp_read_thread, (proc.stdout,))
-    dsp_write_thread_v = thread.start_new_thread(dsp_write_thread, (proc.stdin,))
+    dsp_write_thread_v = thread.start_new_thread(dsp_write_thread, (proc.stdin, dsp_input_queue))
     if CONFIG.debug_dsp_command:
         dsp_debug_thread_v = thread.start_new_thread(dsp_debug_thread, ())
 
@@ -161,7 +161,7 @@ class Client(asyncore.dispatcher):
         command = bytearray(self.recv(5))
         if len(command) >= 5:
             if self.command_allowed(command):
-                commands.put(command)
+                RTL_TCP.commands.put(command)
 
     def command_allowed(self, command):
         global sample_rate
@@ -237,8 +237,9 @@ class Client(asyncore.dispatcher):
 
     def handle_write(self):
         if not self.sent_dongle_id:
-            self.send(rtl_dongle_identifier)
-            self.sent_dongle_id = True
+            if RTL_TCP.dongle_identifier:
+                self.send(RTL_TCP.dongle_identifier)
+                self.sent_dongle_id = True
             return
         # print("write2client",self.waiting_data.qsize())
         next = self.last_waiting_buffer + self.waiting_data.get()
@@ -328,6 +329,7 @@ def rtl_tcp_asyncore_reset(timeout):
     # print("rtl_tcp_asyncore_reset")
     rtl_tcp_resetting = True
     time.sleep(timeout)
+    data = RTL_TCP.__dict__
     try:
         RTL_TCP.close()
     except Exception:
@@ -336,15 +338,19 @@ def rtl_tcp_asyncore_reset(timeout):
         del RTL_TCP
     except Exception:
         pass
-    RTL_TCP = RtlTcpAsyncore()
+    RTL_TCP = RtlTcpAsyncore(data['server_missing_logged'], data['commands'], data['dsp_input_queue'])
     # print(asyncore.socket_map)
     rtl_tcp_resetting = False
 
 
 class RtlTcpAsyncore(asyncore.dispatcher):
-    def __init__(self):
+    def __init__(self, server_missing_logged, commands, dsp_input_queue):
         asyncore.dispatcher.__init__(self)
         self.ok = True
+        self.dongle_identifier = b''  # rtl_tcp sends some identifier on dongle type and gain values in the first few bytes right after connection
+        self.server_missing_logged = server_missing_logged  # Not to flood the screen with messages related to rtl_tcp disconnect
+        self.commands = commands
+        self.dsp_input_queue = dsp_input_queue
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             self.connect((CONFIG.rtl_tcp_host, CONFIG.rtl_tcp_port))
@@ -356,15 +362,14 @@ class RtlTcpAsyncore(asyncore.dispatcher):
             return
 
     def handle_error(self):
-        global server_missing_logged
         global rtl_tcp_connected
         rtl_tcp_connected = False
         exc_type, exc_value, exc_traceback = sys.exc_info()
         self.ok = False
         server_is_missing = hasattr(exc_value, "errno") and exc_value.errno == 111
-        if (not server_is_missing) or (not server_missing_logged):
+        if (not server_is_missing) or (not self.server_missing_logged):
             LOGGER.exception(exc_value)
-            server_missing_logged |= server_is_missing
+            self.server_missing_logged |= server_is_missing
         try:
             self.close()
         except Exception:
@@ -372,14 +377,13 @@ class RtlTcpAsyncore(asyncore.dispatcher):
         thread.start_new_thread(rtl_tcp_asyncore_reset, (2,))
 
     def handle_connect(self):
-        global server_missing_logged
         global rtl_tcp_connected
         self.socket.settimeout(0.1)
         rtl_tcp_connected = True
         if self.ok:
             LOGGER.info("rtl_tcp host connection estabilished")
-            server_missing_logged = False
-            commands.put(b'\x02' + struct.pack('>I', sample_rate)) #send the initial sample_rate
+            self.server_missing_logged = False
+            self.commands.put(b'\x02' + struct.pack('>I', sample_rate)) #send the initial sample_rate
 
     def handle_close(self):
         global rtl_tcp_connected
@@ -392,27 +396,26 @@ class RtlTcpAsyncore(asyncore.dispatcher):
         thread.start_new_thread(rtl_tcp_asyncore_reset, (2,))
 
     def handle_read(self):
-        global rtl_dongle_identifier
         global watchdog_data_count
-        if len(rtl_dongle_identifier) == 0:
-            rtl_dongle_identifier = self.recv(12)
+        if not self.dongle_identifier:
+            self.dongle_identifier = self.recv(12)
             return
         new_data_buffer = self.recv(16348)
         if CONFIG.watchdog_interval:
             watchdog_data_count += 16348
-        if CONFIG.use_dsp_command:
-            dsp_input_queue.put(new_data_buffer)
+        if self.dsp_input_queue is not None:
+            self.dsp_input_queue.put(new_data_buffer)
             # print("did put anyway")
         else:
             SERVER.add_data_to_clients(new_data_buffer)
 
     def writable(self):
         # check if any new commands to write
-        return not commands.empty()
+        return not RTL_TCP.commands.empty()
 
     def handle_write(self):
-        while not commands.empty():
-            mcmd = commands.get()
+        while not RTL_TCP.commands.empty():
+            mcmd = RTL_TCP.commands.get()
             self.send(mcmd)
 
 
@@ -456,20 +459,11 @@ def watchdog_thread():
 
 
 def main():
-    global server_missing_logged
-    global rtl_dongle_identifier
-    global dsp_input_queue
-    global commands
     global RTL_TCP, SERVER
     global sample_rate
 
     setup_logging()
     LOGGER.info("Server is UP")
-
-    server_missing_logged = 0  # Not to flood the screen with messages related to rtl_tcp disconnect
-    rtl_dongle_identifier = b''  # rtl_tcp sends some identifier on dongle type and gain values in the first few bytes right after connection
-    commands = multiprocessing.Queue()
-    dsp_input_queue = multiprocessing.Queue()
 
     if not CONFIG.denied_ip_ranges:
         CONFIG.denied_ip_ranges = ('0.0.0.0/0',)
@@ -484,14 +478,17 @@ def main():
 
     # start dsp threads
     if CONFIG.use_dsp_command:
-        start_dsp()
+        dsp_input_queue = multiprocessing.Queue()
+        start_dsp(dsp_input_queue)
+    else:
+        dsp_input_queue = None
 
     # start watchdog thread
     if CONFIG.watchdog_interval != 0:
         watchdog_thread_v = thread.start_new_thread(watchdog_thread, ())
 
     # start asyncores
-    RTL_TCP = RtlTcpAsyncore()
+    RTL_TCP = RtlTcpAsyncore(False, multiprocessing.Queue(), dsp_input_queue)
     SERVER = ServerAsyncore(CONFIG.my_ip, CONFIG.my_listening_port)
 
     asyncore.loop(0.1)
