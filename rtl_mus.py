@@ -129,11 +129,11 @@ def dsp_write_thread(fid):
 
 
 def dsp_debug_thread():
-    global dsp_data_count
+    global dsp_data_count, original_data_count
     while True:
+        dsp_data_count = original_data_count = 0
         time.sleep(1)
         LOGGER.debug("DSP | Original data: %dkB/sec | Processed data: %dkB/sec", original_data_count / 1000, dsp_data_count / 1000)
-        dsp_data_count = original_data_count = 0
 
 
 def start_dsp():
