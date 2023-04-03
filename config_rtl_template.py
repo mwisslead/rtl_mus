@@ -45,13 +45,13 @@ Allow from specific ranges:
 	use_ip_access_control=1
 	order_allow_deny=0 # deny and then allow
 	denied_ip_ranges=() # deny from all
-	allowed_ip_ranges=('192.168.','44.','127.0.0.1') # allow only from ...
+	allowed_ip_ranges=('192.168.0.0/16','44.0.0.0/8','127.0.0.1/32') # allow only from ...
 
 Deny from specific ranges:
 	use_ip_access_control=1
-	order_allow_deny=0 # allow and then deny
+	order_allow_deny=1 # allow and then deny
 	allowed_ip_ranges=() # allow from all
-	denied_ip_ranges=('192.168.') # deny any hosts from ...
+	denied_ip_ranges=('192.168.0.0/16') # deny any hosts from ...
 '''
 use_ip_access_control=0
 order_allow_deny=0

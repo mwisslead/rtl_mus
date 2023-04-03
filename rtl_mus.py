@@ -32,6 +32,7 @@ import time
 import logging
 import os
 import time
+import ipaddress
 import subprocess
 try:
     import thread
@@ -59,8 +60,29 @@ def setup_logging():
         LOGGER.addHandler(file_handler)
 
 
+def convert_short_ip_to_subnet(ip_range):
+    if ip_range.endswith('.'):
+        ip_range = ip_range[:-1]
+    if not ip_range:
+        s = []
+    else:
+        s = ip_range.split('.')
+    b = len(s) * 8
+    if len(s) < 4:
+        s = s + ['0'] * (4 - len(s))
+    s.append(b)
+    return '{}.{}.{}.{}/{}'.format(*s)
+
+
+def ip_network(ip_range):
+    try:
+        return ipaddress.ip_network(ip_range)
+    except ValueError:
+        return ipaddress.ip_network(convert_short_ip_to_subnet(ip_range))
+
+
 def ip_match(this, ip_ranges):
-    return not ip_ranges or any(this.startswith(ip_range) for ip_range in ip_ranges)
+    return any(ipaddress.ip_address(this) in network for network in ip_ranges)
 
 
 def ip_access_control(ip):
@@ -448,6 +470,16 @@ def main():
     rtl_dongle_identifier = b''  # rtl_tcp sends some identifier on dongle type and gain values in the first few bytes right after connection
     commands = multiprocessing.Queue()
     dsp_input_queue = multiprocessing.Queue()
+
+    if not CONFIG.denied_ip_ranges:
+        CONFIG.denied_ip_ranges = ('0.0.0.0/0',)
+    if not CONFIG.allowed_ip_ranges:
+        CONFIG.allowed_ip_ranges = ('0.0.0.0/0',)
+    assert isinstance(CONFIG.denied_ip_ranges, tuple), 'Make sure denied_ip_ranges is a tuple'
+    assert isinstance(CONFIG.allowed_ip_ranges, tuple), 'Make sure allowed_ip_ranges is a tuple'
+    CONFIG.denied_ip_ranges = [ip_network(ip_range) for ip_range in CONFIG.denied_ip_ranges]
+    CONFIG.allowed_ip_ranges = [ip_network(ip_range) for ip_range in CONFIG.allowed_ip_ranges]
+
     sample_rate = CONFIG.initial_sample_rate
 
     # start dsp threads
